@@ -1,0 +1,61 @@
+export namespace Sapling_Tez {
+  export type storage = sapling_state<8>;
+  type @return = [list<operation>, storage];
+  type parameter = list<sapling_transaction<8>>;
+  @entry
+  const @default = (tx_list: parameter, s: storage): @return => {
+    const [ops, new_state, difference] =
+      List.fold(
+        (
+          [[ops, prev_state, budget], tx]: [
+            [list<operation>, storage, tez],
+            sapling_transaction<8>
+          ]
+        ) =>
+          match(Tezos.Next.Sapling.verify_update(tx, prev_state)) {
+            when (None()):
+              failwith("INVALID_SAPLING_TX")
+            when (Some(p)):
+              do {
+                const [bound_data, [tx_balance, new_sapling_state]] = p;
+                const tx_balance_in_tez = (1 as mutez) * abs(tx_balance);
+                if (tx_balance > 0) {
+                  return match(Bytes.unpack(bound_data) as option<key_hash>) {
+                    when (None()):
+                      failwith("UNABLE_TO_UNPACK_RECIPIENT")
+                    when (Some(recipient_key_hash)):
+                      do {
+                        const recipient =
+                          Tezos.implicit_account(recipient_key_hash);
+                        const op =
+                          Tezos.Next.Operation.transaction(
+                            unit,
+                            tx_balance_in_tez,
+                            recipient
+                          );
+                        return [list([op, ...ops]), new_sapling_state, budget];
+                      }
+                  }
+                }
+                return match(budget - tx_balance_in_tez) {
+                  when (None()):
+                    failwith("INVALID_AMOUNT")
+                  when (Some(diff)):
+                    do {
+                      if (Bytes.length(bound_data) == (0 as nat)) {
+                        return failwith("UNEXPECTED_EMPTY_BOUND_DATA")
+                      }
+                      return [ops, new_sapling_state, diff];
+                    }
+                }
+              }
+          },
+        tx_list,
+        [list([]) as list<operation>, s, Tezos.get_amount()]
+      );
+    if (difference != (0 as mutez)) {
+      return failwith("UNEXPECTED_REMAINDER");
+    };
+    return [ops, new_state];
+  }
+}

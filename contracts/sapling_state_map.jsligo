@@ -1,0 +1,162 @@
+#import "./sapling_tez.jsligo" "Sapling_Tez_Contract"
+
+#import "./sapling_fa1_2.jsligo" "Sapling_FA1_2_Contract"
+
+#import "./sapling_fa2.jsligo" "Sapling_FA2_Contract"
+
+export namespace Sapling_State_Map {
+  export type storage = {
+    tez: sapling_state<8>;
+    token_fa_1_2: map<address, sapling_state<8>>;
+    token_fa_2: map<[address, nat], sapling_state<8>>;
+  };
+  type @return = [list<operation>, storage];
+  type default_parameter =
+    list<
+      {
+        txns: list<sapling_transaction<8>>;
+        contract: option<address>;
+        token_id: option<nat>;
+      }
+    >;
+  type init_new_sapling_pool_parameter = {
+    contract: address;
+    token_id: option<nat>;
+  };
+  @entry
+  const @default = (txn_list: default_parameter, s: storage): @return => {
+    let all_ops: list<operation> = list([]);
+    let updated_storage = s;
+    for (const txn of txn_list) {
+      const { contract, token_id, txns } = txn;
+      match(contract) {
+        when (None()):
+          // Interacting with tez sapling pool
+          do {
+            const sapling_state = s.tez;
+            const [ops, new_sapling_state] =
+              Sapling_Tez_Contract.Sapling_Tez.@default(txns, sapling_state);
+            all_ops
+            = List.fold(
+                ([acc, elt]: [list<operation>, operation]): list<operation> =>
+                  List.cons(elt, acc),
+                ops,
+                all_ops
+              );
+            updated_storage.tez = new_sapling_state;
+          }
+        when (Some(contract)):
+          // Interacting with FA1.2 or FA2 sapling pool
+          do {
+            match(token_id) {
+              when (None()):
+                do {
+                  // Interacting with FA1.2 sapling pool
+                  const sapling_state =
+                    match(Map.find_opt(contract, s.token_fa_1_2)) {
+                      when (None()):
+                        failwith("SAPLING_STATE_NOT_FOUND")
+                      when (Some(state)):
+                        state
+                    };
+                  const [ops, new_sapling_state] =
+                    Sapling_FA1_2_Contract.Sapling_FA1_2.@default(
+                      txns,
+                      { state: sapling_state, contract: contract }
+                    );
+                  all_ops
+                  = List.fold(
+                      ([acc, elt]: [list<operation>, operation]): list<
+                        operation
+                      > =>
+                        List.cons(elt, acc),
+                      ops,
+                      all_ops
+                    );
+                  updated_storage.token_fa_1_2
+                  = Map.update(
+                      contract,
+                      Some(new_sapling_state.state),
+                      s.token_fa_1_2
+                    )
+                }
+              when (Some(token_id)):
+                do {
+                  // Interacting with FA2 sapling pool
+                  const sapling_state =
+                    match(Map.find_opt([contract, token_id], s.token_fa_2)) {
+                      when (None()):
+                        failwith("SAPLING_STATE_NOT_FOUND")
+                      when (Some(state)):
+                        state
+                    };
+                  const [ops, new_sapling_state] =
+                    Sapling_FA2_Contract.Sapling_FA2.@default(
+                      txns,
+                      {
+                        state: sapling_state,
+                        contract: contract,
+                        token_id: token_id
+                      }
+                    );
+                  all_ops
+                  = List.fold(
+                      ([acc, elt]: [list<operation>, operation]): list<
+                        operation
+                      > =>
+                        List.cons(elt, acc),
+                      ops,
+                      all_ops
+                    );
+                  updated_storage.token_fa_2
+                  = Map.update(
+                      [contract, token_id],
+                      Some(new_sapling_state.state),
+                      s.token_fa_2
+                    );
+                }
+            };
+          }
+      }
+    }
+    return [all_ops, updated_storage];
+  }
+  @entry
+  const init_token_sapling_pool = (
+    init: init_new_sapling_pool_parameter,
+    s: storage
+  ): @return => {
+    let updated_storage = s;
+    match(init.token_id) {
+      when (None()):
+        do {
+          const pool_exists = Map.mem(init.contract, s.token_fa_1_2);
+          if (pool_exists) {
+            failwith("SAPLING_POOL_ALREADY_EXISTS");
+          }
+          // Initializing an FA1.2 sapling pool
+          updated_storage.token_fa_1_2
+          = Map.add(
+              init.contract,
+              Tezos.Next.Sapling.empty_state as sapling_state<8>,
+              s.token_fa_1_2
+            )
+        }
+      when (Some(token_id)):
+        do {
+          const pool_exists = Map.mem([init.contract, token_id], s.token_fa_2);
+          if (pool_exists) {
+            failwith("SAPLING_POOL_ALREADY_EXISTS");
+          }
+          // Initializing an FA2 sapling pool
+          updated_storage.token_fa_2
+          = Map.add(
+              [init.contract, token_id],
+              Tezos.Next.Sapling.empty_state as sapling_state<8>,
+              s.token_fa_2
+            )
+        }
+    };
+    return [list([]), updated_storage];
+  }
+}

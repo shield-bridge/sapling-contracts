@@ -1,4 +1,4 @@
-#include "sapling_fa12.jsligo"
+#import "sapling_fa2.jsligo" "Sapling_FA2"
 
 // Define your parameter values as a list of LIGO variable definitions
 // E.g. const aParameterValue : aParameterType = (Increment (1));

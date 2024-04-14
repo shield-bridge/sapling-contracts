@@ -2,4 +2,6 @@
 artifacts
 .taq/*-state.json
 .taq/config.local.*.json
+repository_id
+user_id
 node_modules/

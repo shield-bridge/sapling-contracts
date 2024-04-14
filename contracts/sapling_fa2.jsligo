@@ -1,0 +1,125 @@
+export namespace Sapling_FA2 {
+  export type storage = {
+    state: sapling_state<8>,
+    contract: address,
+    token_id: nat
+  };
+  type @return = [list<operation>, storage];
+  type parameter = list<sapling_transaction<8>>;
+  type fa2_transaction = { to_: address, token_id: nat, amount: nat };
+  type fa2_transfer = { from_: address, txs: list<fa2_transaction> };
+  type fa2_parameter = list<fa2_transfer>;
+  type requests = [list<[address, nat]>, nat, storage];
+  type loop_els = [requests, sapling_transaction<8>];
+  @entry
+  const @default = (tx_list: parameter, s: storage): @return => {
+    // contract must fail if an amount of tez is transferred
+    if (Tezos.get_amount() > (0 as tez)) {
+      return failwith("UNEXPECTED_XTZ_AMOUNT");
+    }
+    const [unshielding_reqs, shielding_reqs, new_state]: requests =
+      List.fold(
+        ([[unshielding_reqs, shielding_reqs, storage], tx]: loop_els) =>
+          match(Tezos.Next.Sapling.verify_update(tx, storage.state)) {
+            when (None()):
+              failwith("INVALID_SAPLING_TX")
+            when (Some(verifiedData)):
+              do {
+                const [bound_data, [tx_balance, new_sapling_state]]: [
+                  bytes,
+                  [int, sapling_state<8>]
+                ] =
+                  verifiedData;
+                // If the balance is strictly positive (i.e. unshielding), we send
+                // funds to the given address.
+                if (tx_balance > 0) {
+                  return match(Bytes.unpack(bound_data) as option<key_hash>) {
+                    when (None()):
+                      failwith("UNABLE_TO_UNPACK_RECIPIENT")
+                    when (Some(recipient_key_hash)):
+                      do {
+                        const recipient =
+                          Tezos.address(
+                            Tezos.implicit_account(recipient_key_hash)
+                          );
+                        const data = [recipient, abs(tx_balance)];
+                        return [
+                          list([data, ...unshielding_reqs]),
+                          shielding_reqs,
+                          { ...storage, state: new_sapling_state }
+                        ];
+                      }
+                  };
+                } else if (tx_balance < 0) {
+                  // If the balance is negative, the contract receives the tokens (shielding)
+                  return match(Bytes.unpack(bound_data) as option<key_hash>) {
+                    when (Some(_)):
+                      failwith("UNEXPECTED_RECIPIENT")
+                    when (None()):
+                      [
+                        unshielding_reqs,
+                        shielding_reqs + abs(tx_balance),
+                        { ...storage, state: new_sapling_state }
+                      ]
+                  };
+                } else {
+                  // If the balance is zero (Sapling transfer)
+                  return [
+                    unshielding_reqs,
+                    shielding_reqs,
+                    { ...storage, state: new_sapling_state }
+                  ];
+                }
+              }
+          },
+        tx_list,
+        [list([]), 0 as nat, s] as requests
+      );
+    // creates the transfers
+    const op: operation =
+      match(Tezos.get_entrypoint_opt("%transfer", s.contract)) {
+        when (None()):
+          failwith("%TRANFER_DOESNT_EXIST")
+        when (Some(contract)):
+          do {
+            const transfers_to: fa2_parameter =
+              shielding_reqs > (0 as nat) ? list(
+                  [
+                    {
+                      from_: Tezos.get_sender(),
+                      txs: list(
+                        [
+                          {
+                            to_: Tezos.get_self_address(),
+                            token_id: s.token_id,
+                            amount: shielding_reqs,
+                          }
+                        ]
+                      )
+                    }
+                  ]
+                ) : list([]);
+            const transfers_from: list<fa2_transaction> =
+              List.map(
+                (req: [address, nat]) => {
+                  return { to_: req[0], amount: req[1], token_id: s.token_id, };
+                },
+                unshielding_reqs
+              );
+            const transfers: fa2_parameter =
+              list(
+                [
+                  { from_: Tezos.get_self_address(), txs: transfers_from, },
+                  ...transfers_to
+                ]
+              );
+            return Tezos.Next.Operation.transaction(
+              transfers,
+              0 as tez,
+              contract
+            );
+          }
+      };
+    return [list([op]), new_state];
+  }
+}

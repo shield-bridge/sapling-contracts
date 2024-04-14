@@ -35,7 +35,7 @@
             }
         }
     },
-    "environmentDefault": "testing",
+    "environmentDefault": "development",
     "environments": {
         "development": {
             "type": "flextesa",
@@ -55,19 +55,7 @@
     "plugins": [
         {
             "type": "npm",
-            "name": "@taqueria/plugin-contract-types"
-        },
-        {
-            "type": "npm",
             "name": "@taqueria/plugin-core"
-        },
-        {
-            "type": "npm",
-            "name": "@taqueria/plugin-flextesa"
-        },
-        {
-            "type": "npm",
-            "name": "@taqueria/plugin-jest"
         },
         {
             "type": "npm",
@@ -75,11 +63,11 @@
         },
         {
             "type": "npm",
-            "name": "@taqueria/plugin-taquito"
+            "name": "@taqueria/plugin-flextesa"
         },
         {
             "type": "npm",
-            "name": "@taqueria/plugin-tezos-client"
+            "name": "@taqueria/plugin-taquito"
         }
     ]
 }
