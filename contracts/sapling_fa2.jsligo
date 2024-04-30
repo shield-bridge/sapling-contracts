@@ -1,25 +1,25 @@
 export namespace Sapling_FA2 {
-  export type storage = {
-    state: sapling_state<8>,
-    contract: address,
-    token_id: nat
+  export type Storage = {
+    state: sapling_state<8>;
+    contract: address;
+    token_id: nat;
   };
-  type @return = [list<operation>, storage];
-  type parameter = list<sapling_transaction<8>>;
-  type fa2_transaction = { to_: address, token_id: nat, amount: nat };
-  type fa2_transfer = { from_: address, txs: list<fa2_transaction> };
-  type fa2_parameter = list<fa2_transfer>;
-  type requests = [list<[address, nat]>, nat, storage];
-  type loop_els = [requests, sapling_transaction<8>];
+  type Return = [list<operation>, Storage];
+  type Parameter = list<sapling_transaction<8>>;
+  type FA2_Transaction = { to_: address; token_id: nat; amount: nat };
+  type FA2_Transfer = { from_: address; txs: list<FA2_Transaction> };
+  export type FA2_Parameter = list<FA2_Transfer>;
+  type Requests = [list<[address, nat]>, nat, Storage];
+  type Loop_Els = [Requests, sapling_transaction<8>];
   @entry
-  const @default = (tx_list: parameter, s: storage): @return => {
+  const @default = (tx_list: Parameter, s: Storage): Return => {
     // contract must fail if an amount of tez is transferred
     if (Tezos.get_amount() > (0 as tez)) {
       return failwith("UNEXPECTED_XTZ_AMOUNT");
     }
-    const [unshielding_reqs, shielding_reqs, new_state]: requests =
+    const [unshielding_reqs, shielding_reqs, new_state]: Requests =
       List.fold(
-        ([[unshielding_reqs, shielding_reqs, storage], tx]: loop_els) =>
+        ([[unshielding_reqs, shielding_reqs, storage], tx]: Loop_Els) =>
           match(Tezos.Next.Sapling.verify_update(tx, storage.state)) {
             when (None()):
               failwith("INVALID_SAPLING_TX")
@@ -73,8 +73,15 @@ export namespace Sapling_FA2 {
               }
           },
         tx_list,
-        [list([]), 0 as nat, s] as requests
+        [list([]), 0 as nat, s] as Requests
       );
+    // If there are no requests, we return an empty list of operations and the new state
+    if (
+      List.length(unshielding_reqs) == (0 as nat)
+      && shielding_reqs == (0 as nat)
+    ) {
+      return [list([]), new_state];
+    }
     // creates the transfers
     const op: operation =
       match(Tezos.get_entrypoint_opt("%transfer", s.contract)) {
@@ -82,7 +89,7 @@ export namespace Sapling_FA2 {
           failwith("%TRANFER_DOESNT_EXIST")
         when (Some(contract)):
           do {
-            const transfers_to: fa2_parameter =
+            const transfers_to: FA2_Parameter =
               shielding_reqs > (0 as nat) ? list(
                   [
                     {
@@ -99,20 +106,20 @@ export namespace Sapling_FA2 {
                     }
                   ]
                 ) : list([]);
-            const transfers_from: list<fa2_transaction> =
+            const transfers_from: list<FA2_Transaction> =
               List.map(
                 (req: [address, nat]) => {
                   return { to_: req[0], amount: req[1], token_id: s.token_id, };
                 },
                 unshielding_reqs
               );
-            const transfers: fa2_parameter =
-              list(
-                [
-                  { from_: Tezos.get_self_address(), txs: transfers_from, },
-                  ...transfers_to
-                ]
-              );
+            const transfers =
+              List.length(transfers_from) != (0 as nat) ? list(
+                  [
+                    { from_: Tezos.get_self_address(), txs: transfers_from, },
+                    ...transfers_to,
+                  ]
+                ) : transfers_to;
             return Tezos.Next.Operation.transaction(
               transfers,
               0 as tez,

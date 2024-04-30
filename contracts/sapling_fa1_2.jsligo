@@ -1,23 +1,23 @@
 export namespace Sapling_FA1_2 {
-  export type storage = { state: sapling_state<8>, contract: address };
-  type @return = [list<operation>, storage];
-  type parameter = list<sapling_transaction<8>>;
-  type fa1_2_parameter = {
+  export type Storage = { state: sapling_state<8>, contract: address };
+  type Return = [list<operation>, Storage];
+  type Parameter = list<sapling_transaction<8>>;
+  export type FA1_2_Parameter = {
     /* @annot from */
-    from_: address,
+    from_: address;
     /* @annot to */
-    to_: address,
-    value: nat,
+    to_: address;
+    value: nat;
   };
   @entry
-  const @default = (tx_list: parameter, s: storage): @return => {
+  const @default = (tx_list: Parameter, s: Storage): Return => {
     // contract must fail if an amount of tez is transferred
     if (Tezos.get_amount() > (0 as tez)) {
       return failwith("UNEXPECTED_XTZ_AMOUNT")
     }
     return match(
       Tezos.get_entrypoint_opt("%transfer", s.contract) as
-        option<contract<fa1_2_parameter>>
+        option<contract<FA1_2_Parameter>>
     ) {
       when (None()):
         failwith("%TRANSFER_DOESNT_EXIST")
@@ -26,7 +26,7 @@ export namespace Sapling_FA1_2 {
           return List.fold(
             (
               [[ops, storage], tx]: [
-                [list<operation>, storage],
+                [list<operation>, Storage],
                 sapling_transaction<8>
               ]
             ) =>

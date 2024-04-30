@@ -3,7 +3,7 @@
 // Define your initial storage values as a list of LIGO variable definitions,
 // the first of which will be considered the default value to be used for origination later on
 // E.g. const aStorageValue : aStorageType = 10;
-const default_storage: Contract.Sapling_State_Map.storage = {
+const default_storage: Contract.Sapling_State_Map.Storage = {
   tez: Tezos.Next.Sapling.empty_state as sapling_state<8>,
   token_fa_1_2: (Map.empty as map<address, sapling_state<8>>),
   token_fa_2: (Map.empty as map<[address, nat], sapling_state<8>>)

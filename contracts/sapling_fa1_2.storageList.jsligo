@@ -3,7 +3,7 @@
 // Define your initial storage values as a list of LIGO variable definitions,
 // the first of which will be considered the default value to be used for origination later on
 // E.g. const aStorageValue : aStorageType = 10;
-const default_storage: Contract.Sapling_FA1_2.storage = {
+const default_storage: Contract.Sapling_FA1_2.Storage = {
   state: Tezos.Next.Sapling.empty_state as sapling_state<8>,
   contract: "KT1SjXiUX63QvdNMcM2m492f7kuf8JxXRLp4" as address,
 };

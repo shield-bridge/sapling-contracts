@@ -9,6 +9,7 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
+    "@taqueria/plugin-contract-types": "^0.52.0",
     "@taqueria/plugin-core": "^0.51.0",
     "@taqueria/plugin-flextesa": "^0.51.0",
     "@taqueria/plugin-ligo": "^0.51.0",

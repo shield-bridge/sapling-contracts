@@ -1,14 +1,14 @@
 export namespace Sapling_Tez {
-  export type storage = sapling_state<8>;
-  type @return = [list<operation>, storage];
-  type parameter = list<sapling_transaction<8>>;
+  export type Storage = sapling_state<8>;
+  type Return = [list<operation>, Storage];
+  type Parameter = list<sapling_transaction<8>>;
   @entry
-  const @default = (tx_list: parameter, s: storage): @return => {
+  const @default = (tx_list: Parameter, s: Storage): Return => {
     const [ops, new_state, difference] =
       List.fold(
         (
           [[ops, prev_state, budget], tx]: [
-            [list<operation>, storage, tez],
+            [list<operation>, Storage, tez],
             sapling_transaction<8>
           ]
         ) =>
@@ -42,8 +42,8 @@ export namespace Sapling_Tez {
                     failwith("INVALID_AMOUNT")
                   when (Some(diff)):
                     do {
-                      if (Bytes.length(bound_data) == (0 as nat)) {
-                        return failwith("UNEXPECTED_EMPTY_BOUND_DATA")
+                      if (Bytes.length(bound_data) != (0 as nat)) {
+                        failwith("UNEXPECTED_EMPTY_BOUND_DATA")
                       }
                       return [ops, new_sapling_state, diff];
                     }
