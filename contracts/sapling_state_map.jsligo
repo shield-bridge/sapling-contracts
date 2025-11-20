@@ -155,7 +155,7 @@ export namespace Sapling_State_Map {
               >
           ) {
             when (None()):
-              failwith("%TRANFER_DOESNT_EXIST")
+              failwith("%TRANSFER_DOESNT_EXIST")
             when (Some(_)):
               do {
                 match(
@@ -190,7 +190,7 @@ export namespace Sapling_State_Map {
               option<contract<Sapling_FA2_Contract.Sapling_FA2.FA2_Parameter>>
           ) {
             when (None()):
-              failwith("%TRANFER_DOESNT_EXIST")
+              failwith("%TRANSFER_DOESNT_EXIST")
             when (Some(_)):
               do {
                 match(
