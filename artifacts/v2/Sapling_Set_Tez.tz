@@ -1,0 +1,71 @@
+{ parameter (list (sapling_transaction 8)) ;
+  storage (sapling_state 8) ;
+  code { UNPAIR ;
+         AMOUNT ;
+         DIG 2 ;
+         NIL operation ;
+         PAIR 3 ;
+         SWAP ;
+         LAMBDA
+           (pair (pair (list operation) (pair (sapling_state 8) mutez)) (sapling_transaction 8))
+           (pair (list operation) (pair (sapling_state 8) mutez))
+           { UNPAIR ;
+             UNPAIR 3 ;
+             SWAP ;
+             DIG 3 ;
+             SAPLING_VERIFY_UPDATE ;
+             IF_NONE
+               { PUSH string "INVALID_SAPLING_TX" ; FAILWITH }
+               { UNPAIR ;
+                 SWAP ;
+                 UNPAIR ;
+                 DUP ;
+                 ABS ;
+                 PUSH mutez 1 ;
+                 MUL ;
+                 SWAP ;
+                 GT ;
+                 IF { DIG 2 ;
+                      UNPACK key_hash ;
+                      PUSH string "UNABLE_TO_UNPACK_RECIPIENT" ;
+                      SWAP ;
+                      IF_NONE { FAILWITH } { SWAP ; DROP } ;
+                      IMPLICIT_ACCOUNT ;
+                      SWAP ;
+                      UNIT ;
+                      TRANSFER_TOKENS ;
+                      DIG 3 ;
+                      DIG 2 ;
+                      NIL operation ;
+                      DIG 4 ;
+                      NIL operation ;
+                      SWAP ;
+                      ITER { CONS } ;
+                      ITER { CONS } ;
+                      DIG 3 ;
+                      CONS ;
+                      PAIR 3 }
+                    { DIG 4 ;
+                      SUB_MUTEZ ;
+                      IF_NONE
+                        { PUSH string "INSUFFICIENT_TEZ_AMOUNT" ; FAILWITH }
+                        { PUSH nat 0 ;
+                          DIG 3 ;
+                          SIZE ;
+                          COMPARE ;
+                          NEQ ;
+                          IF { PUSH string "UNEXPECTED_BOUND_DATA" ; FAILWITH } {} ;
+                          SWAP ;
+                          DIG 2 ;
+                          PAIR 3 } } } } ;
+         DUG 2 ;
+         ITER { SWAP ; PAIR ; DUP 2 ; SWAP ; EXEC } ;
+         SWAP ;
+         DROP ;
+         UNPAIR 3 ;
+         PUSH mutez 0 ;
+         DIG 3 ;
+         COMPARE ;
+         NEQ ;
+         IF { PUSH string "TEZ_AMOUNT_MISMATCH" ; FAILWITH } { PAIR } } }
+

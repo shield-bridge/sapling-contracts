@@ -1,0 +1,105 @@
+{ parameter (list (sapling_transaction 8)) ;
+  storage (pair (sapling_state %state 8) (pair (address %contract) (nat %token_id))) ;
+  code { UNPAIR ;
+         PUSH mutez 0 ;
+         AMOUNT ;
+         COMPARE ;
+         GT ;
+         IF { PUSH string "UNEXPECTED_XTZ_AMOUNT" ; FAILWITH }
+            { DUP 2 ;
+              GET 3 ;
+              CONTRACT
+                (list (pair (address %from_)
+                            (list %txs (pair (address %to_) (pair (nat %token_id) (nat %amount)))))) ;
+              IF_NONE { PUSH string "TRANSFER_ENTRYPOINT_NOT_FOUND" ; FAILWITH } {} ;
+              SELF_ADDRESS ;
+              SOURCE ;
+              DUP 5 ;
+              NIL operation ;
+              PAIR ;
+              DIG 4 ;
+              ITER { SWAP ;
+                     DUP ;
+                     GET 3 ;
+                     DIG 2 ;
+                     SAPLING_VERIFY_UPDATE ;
+                     IF_NONE
+                       { PUSH string "INVALID_SAPLING_TX" ; FAILWITH }
+                       { UNPAIR ;
+                         SWAP ;
+                         UNPAIR ;
+                         DUP 8 ;
+                         GET 4 ;
+                         DIG 4 ;
+                         UNPAIR ;
+                         DUP 4 ;
+                         GT ;
+                         IF { DIG 5 ;
+                              UNPACK key_hash ;
+                              PUSH string "UNABLE_TO_UNPACK_RECIPIENT" ;
+                              SWAP ;
+                              IF_NONE { FAILWITH } { SWAP ; DROP } ;
+                              IMPLICIT_ACCOUNT ;
+                              ADDRESS ;
+                              DIG 4 ;
+                              ABS ;
+                              DUP 9 ;
+                              PUSH mutez 0 ;
+                              NIL (pair address (list (pair address (pair nat nat)))) ;
+                              NIL (pair address (pair nat nat)) ;
+                              DIG 4 ;
+                              DIG 8 ;
+                              DIG 6 ;
+                              PAIR 3 ;
+                              CONS ;
+                              DUP 9 ;
+                              PAIR ;
+                              CONS ;
+                              TRANSFER_TOKENS ;
+                              DIG 2 ;
+                              DIG 3 ;
+                              UPDATE 1 ;
+                              NIL operation ;
+                              DIG 3 ;
+                              NIL operation ;
+                              SWAP ;
+                              ITER { CONS } ;
+                              ITER { CONS } ;
+                              DIG 2 ;
+                              CONS }
+                            { DIG 5 ;
+                              UNPACK key_hash ;
+                              IF_NONE {} { PUSH string "UNEXPECTED_RECIPIENT" ; FAILWITH } ;
+                              DUP 4 ;
+                              LT ;
+                              IF { DIG 3 ;
+                                   ABS ;
+                                   DUP 8 ;
+                                   PUSH mutez 0 ;
+                                   NIL (pair address (list (pair address (pair nat nat)))) ;
+                                   NIL (pair address (pair nat nat)) ;
+                                   DIG 4 ;
+                                   DIG 7 ;
+                                   DUP 11 ;
+                                   PAIR 3 ;
+                                   CONS ;
+                                   DUP 8 ;
+                                   PAIR ;
+                                   CONS ;
+                                   TRANSFER_TOKENS ;
+                                   DIG 2 ;
+                                   DIG 3 ;
+                                   UPDATE 1 ;
+                                   NIL operation ;
+                                   DIG 3 ;
+                                   NIL operation ;
+                                   SWAP ;
+                                   ITER { CONS } ;
+                                   ITER { CONS } ;
+                                   DIG 2 ;
+                                   CONS }
+                                 { DIG 2 ; DROP ; DIG 2 ; DROP ; SWAP ; DIG 2 ; UPDATE 1 ; SWAP } } ;
+                         PAIR } } ;
+              DUG 4 ;
+              DROP 4 } } }
+

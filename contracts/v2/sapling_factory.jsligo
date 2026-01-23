@@ -1,0 +1,260 @@
+/**
+ * Sapling Factory Contract
+ *
+ * This contract serves as a registry and router for Sapling shielded pools.
+ * It deploys new set contracts for tokens and routes transactions to the
+ * appropriate set contract.
+ *
+ * Supported token types:
+ *   - Tez (native)
+ *   - FA1.2 tokens
+ *   - FA2 tokens
+ */
+
+#import "./sapling_set_tez.jsligo" "Set_Tez"
+
+#import "./sapling_set_fa1_2.jsligo" "Set_FA1_2"
+
+#import "./sapling_set_fa2.jsligo" "Set_FA2"
+
+// ============================================================================
+// Shared Types
+// ============================================================================
+/** FA1.2 approve parameter (for validation) */
+type FA1_2_Approve = { spender: address; value: nat };
+
+/** Key for FA2 token lookup */
+type FA2_Token_Key = { contract: address; token_id: nat };
+
+// ============================================================================
+// Contract Namespace
+// ============================================================================
+export namespace Sapling_Factory {
+  // ==========================================================================
+  // Types
+  // ==========================================================================
+  export type Storage = {
+    tez: address; // Deployed Tez set contract
+
+    token_fa_1_2: big_map<address, address>; // FA1.2 token -> set contract
+
+    token_fa_2: big_map<FA2_Token_Key, address>; // FA2 token+id -> set contract
+
+  };
+  type Return = [list<operation>, Storage];
+  /** Parameter for routing transactions to set contracts */
+  type Transaction_Item = {
+    txns: list<sapling_transaction<8>>; // Sapling transactions to process
+
+    contract: option<address>; // Token contract (None = Tez)
+
+    token_id: option<nat>; // Token ID (for FA2 only)
+
+    amount: option<nat>; // Amount in mutez (for Tez shielding)
+
+  };
+  type Transaction_List = list<Transaction_Item>;
+  /** Parameter for initializing new set contracts */
+  type Init_Parameter = {
+    contract: address; // Token contract address
+
+    token_id: option<nat>; // Token ID (None = FA1.2, Some = FA2)
+
+  };
+  // ==========================================================================
+  // Helper Functions
+  // ==========================================================================
+  /** Route a transaction to the Tez set contract */
+  const process_tez_txn = (
+    txns: list<sapling_transaction<8>>,
+    amount: option<nat>,
+    storage: Storage
+  ): operation => {
+    const set_contract =
+      Tezos.get_contract_with_error(storage.tez, "TEZ_SET_NOT_FOUND") as
+        contract<list<sapling_transaction<8>>>;
+    const amt = Option.value(0 as nat, amount);
+    const transaction_amount = amt * (1 as mutez);
+    return Tezos.Next.Operation.transaction(
+      txns,
+      transaction_amount,
+      set_contract
+    );
+  }
+  /** Route a transaction to an FA1.2 set contract */
+  const process_fa1_2_txn = (
+    txns: list<sapling_transaction<8>>,
+    contract_addr: address,
+    storage: Storage
+  ): operation => {
+    const set_address =
+      Option.value_with_error(
+        "SAPLING_SET_NOT_FOUND",
+        Big_map.find_opt(contract_addr, storage.token_fa_1_2)
+      );
+    const set_contract =
+      Tezos.get_contract_with_error(set_address, "SET_ENTRYPOINT_NOT_FOUND") as
+        contract<Set_FA1_2.Sapling_Set_FA1_2.Parameter>;
+    return Tezos.Next.Operation.transaction(txns, 0 as tez, set_contract);
+  }
+  /** Route a transaction to an FA2 set contract */
+  const process_fa2_txn = (
+    txns: list<sapling_transaction<8>>,
+    contract_addr: address,
+    token_id: nat,
+    storage: Storage
+  ): operation => {
+    const key: FA2_Token_Key = { contract: contract_addr, token_id: token_id };
+    const set_address =
+      Option.value_with_error(
+        "SAPLING_SET_NOT_FOUND",
+        Big_map.find_opt(key, storage.token_fa_2)
+      );
+    const set_contract =
+      Tezos.get_contract_with_error(set_address, "SET_ENTRYPOINT_NOT_FOUND") as
+        contract<Set_FA2.Sapling_Set_FA2.Parameter>;
+    return Tezos.Next.Operation.transaction(txns, 0 as tez, set_contract);
+  }
+  /** Route a transaction to the appropriate set contract based on token type */
+  const process_txn = (txn: Transaction_Item, storage: Storage): operation => {
+    const { contract, token_id, txns, amount } = txn;
+    // No contract = Tez transaction
+    if (Option.is_none(contract)) {
+      return process_tez_txn(txns, amount, storage);
+    }
+    const contract_addr = Option.value_with_error("UNEXPECTED_ERROR", contract);
+    // No token_id = FA1.2 transaction
+    if (Option.is_none(token_id)) {
+      return process_fa1_2_txn(txns, contract_addr, storage);
+    }
+    // Has token_id = FA2 transaction
+    const tid = Option.value_with_error("UNEXPECTED_ERROR", token_id);
+    return process_fa2_txn(txns, contract_addr, tid, storage);
+  }
+  // ==========================================================================
+  // Entry Points
+  // ==========================================================================
+  /**
+   * Process sapling transactions and route to appropriate set contracts.
+   *
+   * For Tez transactions, the XTZ amount sent must match the sum of
+   * all Tez transaction amounts in the parameter.
+   */
+
+  @entry
+  const @default = (txn_list: Transaction_List, storage: Storage): Return => {
+    // Validate XTZ amount if any is sent
+    if (Tezos.get_amount() > (0 as tez)) {
+      let tez_tx_count = 0;
+      let total_tez_amount = 0 as nat;
+      for (const txn of txn_list) {
+        if (Option.is_none(txn.contract)) {
+          tez_tx_count = tez_tx_count + 1;
+          const amt = Option.value(0 as nat, txn.amount);
+          total_tez_amount = total_tez_amount + amt;
+        }
+      }
+      // XTZ sent but no Tez transactions
+      if (tez_tx_count == 0) {
+        failwith("XTZ_SENT_WITHOUT_TEZ_TRANSACTION");
+      }
+      // Validate amounts match
+      const expected_mutez = Tezos.get_amount() / (1 as mutez);
+      if (total_tez_amount != expected_mutez) {
+        failwith("TEZ_AMOUNT_MISMATCH");
+      }
+    }
+    // Route each transaction to its set contract
+    let all_ops: list<operation> = list([]);
+    for (const txn of txn_list) {
+      const op = process_txn(txn, storage);
+      all_ops = list([op, ...all_ops]);
+    }
+    return [all_ops, storage];
+  }
+  /**
+   * Deploy a new set contract for a token.
+   *
+   * For FA1.2: pass token_id = None
+   * For FA2: pass token_id = Some(id)
+   */
+
+  @entry
+  const init_token_sapling_set = (init: Init_Parameter, s: Storage): Return => {
+    // Reject any XTZ
+    if (Tezos.get_amount() > (0 as tez)) {
+      failwith("UNEXPECTED_XTZ_AMOUNT");
+    }
+    if (Option.is_none(init.token_id)) {
+      // ---- FA1.2 Initialization ----
+      // Check if set already exists
+      if (Big_map.mem(init.contract, s.token_fa_1_2)) {
+        failwith("SAPLING_SET_ALREADY_EXISTS");
+      }
+      // Verify FA1.2 entrypoints exist
+      const transfer_ep =
+        Tezos.get_entrypoint_opt("%transfer", init.contract) as
+          option<contract<Set_FA1_2.Sapling_Set_FA1_2.FA1_2_Transfer>>;
+      if (Option.is_none(transfer_ep)) {
+        failwith("TRANSFER_ENTRYPOINT_NOT_FOUND");
+      }
+      const approve_ep =
+        Tezos.get_entrypoint_opt("%approve", init.contract) as
+          option<contract<FA1_2_Approve>>;
+      if (Option.is_none(approve_ep)) {
+        failwith("APPROVE_ENTRYPOINT_NOT_FOUND");
+      }
+      // Deploy new FA1.2 set contract
+      const initial_storage: Set_FA1_2.Sapling_Set_FA1_2.Storage = {
+        state: Tezos.Next.Sapling.empty_state as sapling_state<8>,
+        contract: init.contract
+      };
+      const [op, set_address] =
+        Tezos.create_contract(
+          Set_FA1_2.Sapling_Set_FA1_2.@default,
+          None() as option<key_hash>,
+          0 as tez,
+          initial_storage
+        );
+      return [
+        list([op]),
+        {
+          ...s,
+          token_fa_1_2: Big_map.add(init.contract, set_address, s.token_fa_1_2)
+        }
+      ];
+    } else {
+      // ---- FA2 Initialization ----
+      const tid = Option.value_with_error("UNEXPECTED_ERROR", init.token_id);
+      const key: FA2_Token_Key = { contract: init.contract, token_id: tid };
+      // Check if set already exists
+      if (Big_map.mem(key, s.token_fa_2)) {
+        failwith("SAPLING_SET_ALREADY_EXISTS");
+      }
+      // Verify FA2 transfer entrypoint exists
+      const transfer_ep =
+        Tezos.get_entrypoint_opt("%transfer", init.contract) as
+          option<contract<Set_FA2.Sapling_Set_FA2.FA2_Parameter>>;
+      if (Option.is_none(transfer_ep)) {
+        failwith("TRANSFER_ENTRYPOINT_NOT_FOUND");
+      }
+      // Deploy new FA2 set contract
+      const initial_storage: Set_FA2.Sapling_Set_FA2.Storage = {
+        state: Tezos.Next.Sapling.empty_state as sapling_state<8>,
+        contract: init.contract,
+        token_id: tid
+      };
+      const [op, set_address] =
+        Tezos.create_contract(
+          Set_FA2.Sapling_Set_FA2.@default,
+          None() as option<key_hash>,
+          0 as tez,
+          initial_storage
+        );
+      return [
+        list([op]),
+        { ...s, token_fa_2: Big_map.add(key, set_address, s.token_fa_2) }
+      ];
+    }
+  }
+}

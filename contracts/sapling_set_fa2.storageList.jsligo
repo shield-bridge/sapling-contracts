@@ -1,7 +1,0 @@
-#import "./sapling_set_fa2.jsligo" "Set"
-
-const default_storage: Set.Sapling_Set_FA2.Storage = {
-  state: Tezos.Next.Sapling.empty_state as sapling_state<8>,
-  contract: "KT1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb" as address, // Placeholder token contract
-  token_id: 0 as nat
-};

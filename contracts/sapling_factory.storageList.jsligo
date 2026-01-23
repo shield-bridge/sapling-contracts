@@ -1,8 +1,0 @@
-#import "./sapling_factory.jsligo" "Contract"
-
-const default_storage: Contract.Sapling_Factory.Storage = {
-  tez: None() as option<address>,
-  token_fa_1_2: Big_map.empty as big_map<address, address>,
-  token_fa_2: Big_map.empty as
-    big_map<{ contract: address, token_id: nat }, address>,
-};

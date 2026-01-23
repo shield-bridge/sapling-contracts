@@ -1,0 +1,89 @@
+{ parameter (list (sapling_transaction 8)) ;
+  storage (pair (sapling_state %state 8) (address %contract)) ;
+  code { UNPAIR ;
+         PUSH mutez 0 ;
+         AMOUNT ;
+         COMPARE ;
+         GT ;
+         IF { DROP 2 ; PUSH string "UNEXPECTED_XTZ_AMOUNT" ; FAILWITH }
+            { DUP 2 ;
+              CDR ;
+              CONTRACT %transfer (pair (address %from_) (address %to_) (nat %value)) ;
+              IF_NONE
+                { DROP 2 ; PUSH string "%TRANSFER_DOESNT_EXIST" ; FAILWITH }
+                { DIG 2 ;
+                  NIL operation ;
+                  PAIR ;
+                  DIG 2 ;
+                  ITER { SWAP ;
+                         UNPAIR ;
+                         DUP 2 ;
+                         CAR ;
+                         DIG 3 ;
+                         SAPLING_VERIFY_UPDATE ;
+                         IF_NONE
+                           { DROP 2 ; PUSH string "INVALID_SAPLING_TX" ; FAILWITH }
+                           { UNPAIR ;
+                             SWAP ;
+                             UNPAIR ;
+                             PUSH int 0 ;
+                             DUP 2 ;
+                             COMPARE ;
+                             GT ;
+                             IF { DIG 2 ;
+                                  UNPACK key_hash ;
+                                  IF_NONE
+                                    { DROP 4 ; PUSH string "UNABLE_TO_UNPACK_RECIPIENT" ; FAILWITH }
+                                    { IMPLICIT_ACCOUNT ;
+                                      ADDRESS ;
+                                      SWAP ;
+                                      ABS ;
+                                      SWAP ;
+                                      SELF_ADDRESS ;
+                                      PAIR 3 ;
+                                      DIG 3 ;
+                                      DIG 2 ;
+                                      UPDATE 1 ;
+                                      NIL operation ;
+                                      DIG 3 ;
+                                      NIL operation ;
+                                      SWAP ;
+                                      ITER { CONS } ;
+                                      ITER { CONS } ;
+                                      DUP 4 ;
+                                      PUSH mutez 0 ;
+                                      DIG 4 ;
+                                      TRANSFER_TOKENS ;
+                                      CONS ;
+                                      PAIR } }
+                                { DIG 2 ;
+                                  UNPACK key_hash ;
+                                  IF_NONE
+                                    { PUSH int 0 ;
+                                      DUP 2 ;
+                                      COMPARE ;
+                                      LT ;
+                                      IF { ABS ;
+                                           SELF_ADDRESS ;
+                                           SENDER ;
+                                           PAIR 3 ;
+                                           DIG 3 ;
+                                           DIG 2 ;
+                                           UPDATE 1 ;
+                                           NIL operation ;
+                                           DIG 3 ;
+                                           NIL operation ;
+                                           SWAP ;
+                                           ITER { CONS } ;
+                                           ITER { CONS } ;
+                                           DUP 4 ;
+                                           PUSH mutez 0 ;
+                                           DIG 4 ;
+                                           TRANSFER_TOKENS ;
+                                           CONS }
+                                         { DROP ; DIG 2 ; SWAP ; UPDATE 1 ; SWAP } ;
+                                      PAIR }
+                                    { DROP 5 ; PUSH string "UNEXPECTED_RECIPIENT" ; FAILWITH } } } } ;
+                  SWAP ;
+                  DROP } } } }
+

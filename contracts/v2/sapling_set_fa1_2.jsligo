@@ -1,0 +1,151 @@
+/**
+ * Sapling Set Contract for FA1.2 Tokens
+ *
+ * This contract manages a Sapling shielded pool for a single FA1.2 token.
+ * It supports three operations:
+ *   - Shield: Transfer tokens from user to pool (negative balance)
+ *   - Unshield: Transfer tokens from pool to user (positive balance)
+ *   - Transfer: Move tokens within the shielded pool (zero balance)
+ */
+export namespace Sapling_Set_FA1_2 {
+  // ============================================================================
+  // Types
+  // ============================================================================
+  export type Storage = {
+    state: sapling_state<8>; // The Sapling state tree
+
+    contract: address; // The FA1.2 token contract address
+
+  };
+  type Return = [list<operation>, Storage];
+  export type Parameter = list<sapling_transaction<8>>;
+  /** FA1.2 transfer parameter format */
+  export type FA1_2_Transfer = {
+    /* @annot from */
+    from_: address;
+    /* @annot to */
+    to_: address;
+    value: nat;
+  };
+  /** Accumulator for fold: [operations, storage] */
+  type Accumulator = [list<operation>, Storage];
+  // ============================================================================
+  // Helper Functions
+  // ============================================================================
+  /**
+   * Process a single sapling transaction based on its balance:
+   *   - tx_balance > 0: Unshield (send tokens to recipient)
+   *   - tx_balance < 0: Shield (receive tokens from sender)
+   *   - tx_balance = 0: Private transfer (no token movement)
+   */
+  const handle_tx_balance = (
+    bound_data: bytes,
+    tx_balance: int,
+    new_sapling_state: sapling_state<8>,
+    acc: Accumulator,
+    transfer_contract: contract<FA1_2_Transfer>,
+    self_address: address,
+    source_address: address
+  ): Accumulator => {
+    const [ops, storage] = acc;
+    // UNSHIELD: Send tokens from pool to recipient
+    if (tx_balance > 0) {
+      const recipient_key_hash =
+        Option.value_with_error(
+          "UNABLE_TO_UNPACK_RECIPIENT",
+          Bytes.unpack(bound_data) as option<key_hash>
+        );
+      const recipient =
+        Tezos.address(Tezos.implicit_account(recipient_key_hash));
+      const transfer_param: FA1_2_Transfer = {
+        from_: self_address,
+        to_: recipient,
+        value: abs(tx_balance)
+      };
+      const new_op =
+        Tezos.Next.Operation.transaction(
+          transfer_param,
+          0 as tez,
+          transfer_contract
+        );
+      return [list([new_op, ...ops]), { ...storage, state: new_sapling_state }];
+    }
+    // For non-unshield transactions, bound_data must be empty
+    if (Option.is_some(Bytes.unpack(bound_data) as option<key_hash>)) {
+      failwith("UNEXPECTED_RECIPIENT");
+    }
+    // SHIELD: Receive tokens from sender to pool
+    if (tx_balance < 0) {
+      const transfer_param: FA1_2_Transfer = {
+        from_: source_address,
+        to_: self_address,
+        value: abs(tx_balance)
+      };
+      const new_op =
+        Tezos.Next.Operation.transaction(
+          transfer_param,
+          0 as tez,
+          transfer_contract
+        );
+      return [list([new_op, ...ops]), { ...storage, state: new_sapling_state }];
+    }
+    // PRIVATE TRANSFER: No token movement, just state update
+    return [ops, { ...storage, state: new_sapling_state }];
+  }
+  // ============================================================================
+  // Entry Points
+  // ============================================================================
+
+  @entry
+  const @default = (param: Parameter, s: Storage): Return => {
+    // Reject any XTZ sent to this contract
+    if (Tezos.get_amount() > (0 as tez)) {
+      return failwith("UNEXPECTED_XTZ_AMOUNT");
+    }
+    // Get the FA1.2 transfer entrypoint (must use %transfer, not default)
+    const transfer_contract =
+      match(
+        Tezos.get_entrypoint_opt("%transfer", s.contract) as
+          option<contract<FA1_2_Transfer>>
+      ) {
+        when (None()):
+          failwith("TRANSFER_ENTRYPOINT_NOT_FOUND")
+        when (Some(c)):
+          c
+      };
+    // Cache addresses for use in fold
+    const self_address = Tezos.get_self_address();
+    const source_address = Tezos.get_source();
+    // Process all sapling transactions
+    const initial_acc: Accumulator = [list([]), s];
+    const final_acc =
+      List.fold(
+        ([acc, tx]: [Accumulator, sapling_transaction<8>]) => {
+          return match(Tezos.Next.Sapling.verify_update(tx, acc[1].state)) {
+            when (None()):
+              failwith("INVALID_SAPLING_TX")
+            when (Some(verified_data)):
+              do {
+                const [bound_data, [tx_balance, new_sapling_state]]: [
+                  bytes,
+                  [int, sapling_state<8>]
+                ] =
+                  verified_data;
+                return handle_tx_balance(
+                  bound_data,
+                  tx_balance,
+                  new_sapling_state,
+                  acc,
+                  transfer_contract,
+                  self_address,
+                  source_address
+                );
+              }
+          }
+        },
+        param,
+        initial_acc
+      );
+    return final_acc;
+  }
+}

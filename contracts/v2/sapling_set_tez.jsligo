@@ -1,0 +1,79 @@
+/**
+ * Sapling Set Contract for Tez
+ *
+ * This contract manages a Sapling shielded pool for native Tez.
+ * It supports three operations:
+ *   - Shield: Receive tez from user (negative balance, tez sent with call)
+ *   - Unshield: Send tez to recipient (positive balance)
+ *   - Transfer: Move tez within the shielded pool (zero balance)
+ */
+export namespace Sapling_Set_Tez {
+  // ============================================================================
+  // Types
+  // ============================================================================
+  /** Storage is just the Sapling state (no token contract needed) */
+  export type Storage = sapling_state<8>;
+  type Return = [list<operation>, Storage];
+  type Parameter = list<sapling_transaction<8>>;
+  /** Accumulator for fold: [operations, state, remaining_budget] */
+  type Accumulator = [list<operation>, Storage, tez];
+  // ============================================================================
+  // Entry Points
+  // ============================================================================
+
+  @entry
+  const @default = (tx_list: Parameter, s: Storage): Return => {
+    // Process all sapling transactions, tracking tez budget
+    const [ops, new_state, remaining] =
+      List.fold(
+        ([[ops, prev_state, budget], tx]: [Accumulator, sapling_transaction<8>]) => {
+          return match(Tezos.Next.Sapling.verify_update(tx, prev_state)) {
+            when (None()):
+              failwith("INVALID_SAPLING_TX")
+            when (Some(verified_data)):
+              do {
+                const [bound_data, [tx_balance, new_sapling_state]] =
+                  verified_data;
+                const tx_balance_in_tez = (1 as mutez) * abs(tx_balance);
+                // UNSHIELD: Send tez to recipient
+                if (tx_balance > 0) {
+                  const recipient_key_hash =
+                    Option.value_with_error(
+                      "UNABLE_TO_UNPACK_RECIPIENT",
+                      Bytes.unpack(bound_data) as option<key_hash>
+                    );
+                  const recipient = Tezos.implicit_account(recipient_key_hash);
+                  const op =
+                    Tezos.Next.Operation.transaction(
+                      unit,
+                      tx_balance_in_tez,
+                      recipient
+                    );
+                  return [list([op, ...ops]), new_sapling_state, budget];
+                }
+                // SHIELD or PRIVATE TRANSFER: Consume budget
+                return match(budget - tx_balance_in_tez) {
+                  when (None()):
+                    failwith("INSUFFICIENT_TEZ_AMOUNT")
+                  when (Some(new_budget)):
+                    do {
+                      // For shielding/transfer, bound_data must be empty
+                      if (Bytes.length(bound_data) != (0 as nat)) {
+                        failwith("UNEXPECTED_BOUND_DATA");
+                      }
+                      return [ops, new_sapling_state, new_budget];
+                    }
+                }
+              }
+          }
+        },
+        tx_list,
+        [list([]) as list<operation>, s, Tezos.get_amount()]
+      );
+    // Ensure all sent tez was consumed (no remainder)
+    if (remaining != (0 as mutez)) {
+      return failwith("TEZ_AMOUNT_MISMATCH");
+    }
+    return [ops, new_state];
+  }
+}
