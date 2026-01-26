@@ -20,7 +20,10 @@ export namespace Sapling_Set_FA2 {
 
   };
   type Return = [list<operation>, Storage];
+
+  /** Parameter is a list of sapling transactions to process */
   export type Parameter = list<sapling_transaction<8>>;
+
   /** FA2 transfer transaction (single transfer within a batch) */
   type FA2_Transaction = { to_: address; token_id: nat; amount: nat };
   /** FA2 transfer batch from a single sender */
@@ -35,7 +38,7 @@ export namespace Sapling_Set_FA2 {
   /**
    * Process a single sapling transaction based on its balance:
    *   - tx_balance > 0: Unshield (send tokens to recipient)
-   *   - tx_balance < 0: Shield (receive tokens from sender)
+   *   - tx_balance < 0: Shield (receive tokens from source)
    *   - tx_balance = 0: Private transfer (no token movement)
    */
   const handle_tx_balance = (
@@ -82,7 +85,7 @@ export namespace Sapling_Set_FA2 {
     if (Option.is_some(Bytes.unpack(bound_data) as option<key_hash>)) {
       failwith("UNEXPECTED_RECIPIENT");
     }
-    // SHIELD: Receive tokens from sender to pool
+    // SHIELD: Receive tokens from source to pool
     if (tx_balance < 0) {
       const amount = abs(tx_balance);
       const transfer_param: FA2_Parameter =
@@ -130,6 +133,7 @@ export namespace Sapling_Set_FA2 {
       };
     // Cache values for use in fold
     const self_address = Tezos.get_self_address();
+    // source_address is the original transaction signer
     const source_address = Tezos.get_source();
     const token_id = s.token_id;
     // Process all sapling transactions

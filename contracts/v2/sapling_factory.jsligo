@@ -23,6 +23,13 @@
 /** FA1.2 approve parameter (for validation) */
 type FA1_2_Approve = { spender: address; value: nat };
 
+/** FA2 update_operators parameter types (for validation) */
+type FA2_Operator = { owner: address; operator: address; token_id: nat };
+type FA2_Update_Operator = 
+  | ["Add_operator", FA2_Operator]
+  | ["Remove_operator", FA2_Operator];
+type FA2_Update_Operators = list<FA2_Update_Operator>;
+
 /** Key for FA2 token lookup */
 type FA2_Token_Key = { contract: address; token_id: nat };
 
@@ -237,6 +244,13 @@ export namespace Sapling_Factory {
           option<contract<Set_FA2.Sapling_Set_FA2.FA2_Parameter>>;
       if (Option.is_none(transfer_ep)) {
         failwith("TRANSFER_ENTRYPOINT_NOT_FOUND");
+      }
+      // Verify FA2 update_operators entrypoint exists (required by TZIP-12)
+      const update_operators_ep =
+        Tezos.get_entrypoint_opt("%update_operators", init.contract) as
+          option<contract<FA2_Update_Operators>>;
+      if (Option.is_none(update_operators_ep)) {
+        failwith("UPDATE_OPERATORS_ENTRYPOINT_NOT_FOUND");
       }
       // Deploy new FA2 set contract
       const initial_storage: Set_FA2.Sapling_Set_FA2.Storage = {

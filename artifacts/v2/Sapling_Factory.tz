@@ -25,7 +25,7 @@
                  IF { PUSH string "SAPLING_SET_ALREADY_EXISTS" ; FAILWITH } {} ;
                  DUP ;
                  CAR ;
-                 CONTRACT %transfer (pair (address %from_) (pair (address %to_) (nat %value))) ;
+                 CONTRACT %transfer (pair (address %from) (pair (address %to) (nat %value))) ;
                  IF_NONE { PUSH string "TRANSFER_ENTRYPOINT_NOT_FOUND" ; FAILWITH } { DROP } ;
                  DUP ;
                  CAR ;
@@ -48,7 +48,7 @@
                             IF { PUSH string "UNEXPECTED_XTZ_AMOUNT" ; FAILWITH }
                                { DUP 2 ;
                                  CDR ;
-                                 CONTRACT %transfer (pair (address %from_) (pair (address %to_) (nat %value))) ;
+                                 CONTRACT %transfer (pair (address %from) (pair (address %to) (nat %value))) ;
                                  IF_NONE { PUSH string "TRANSFER_ENTRYPOINT_NOT_FOUND" ; FAILWITH } {} ;
                                  SELF_ADDRESS ;
                                  SOURCE ;
@@ -154,6 +154,14 @@
                    (list (pair (address %from_)
                                (list %txs (pair (address %to_) (pair (nat %token_id) (nat %amount)))))) ;
                  IF_NONE { PUSH string "TRANSFER_ENTRYPOINT_NOT_FOUND" ; FAILWITH } { DROP } ;
+                 DUP 3 ;
+                 CAR ;
+                 CONTRACT %update_operators
+                   (list (or (pair %add_operator (address %owner) (pair (address %operator) (nat %token_id)))
+                             (pair %remove_operator (address %owner) (pair (address %operator) (nat %token_id))))) ;
+                 IF_NONE
+                   { PUSH string "UPDATE_OPERATORS_ENTRYPOINT_NOT_FOUND" ; FAILWITH }
+                   { DROP } ;
                  SWAP ;
                  DIG 2 ;
                  CAR ;

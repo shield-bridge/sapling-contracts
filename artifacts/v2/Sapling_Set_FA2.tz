@@ -8,7 +8,7 @@
          IF { PUSH string "UNEXPECTED_XTZ_AMOUNT" ; FAILWITH }
             { DUP 2 ;
               GET 3 ;
-              CONTRACT
+              CONTRACT %transfer
                 (list (pair (address %from_)
                             (list %txs (pair (address %to_) (pair (nat %token_id) (nat %amount)))))) ;
               IF_NONE { PUSH string "TRANSFER_ENTRYPOINT_NOT_FOUND" ; FAILWITH } {} ;

@@ -8,7 +8,7 @@
          IF { PUSH string "UNEXPECTED_XTZ_AMOUNT" ; FAILWITH }
             { DUP 2 ;
               CDR ;
-              CONTRACT (pair (address %from_) (pair (address %to_) (nat %value))) ;
+              CONTRACT %transfer (pair (address %from) (pair (address %to) (nat %value))) ;
               IF_NONE { PUSH string "TRANSFER_ENTRYPOINT_NOT_FOUND" ; FAILWITH } {} ;
               SELF_ADDRESS ;
               SOURCE ;

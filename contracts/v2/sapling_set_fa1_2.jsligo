@@ -18,15 +18,18 @@ export namespace Sapling_Set_FA1_2 {
 
   };
   type Return = [list<operation>, Storage];
+
+  /** Parameter is a list of sapling transactions to process */
   export type Parameter = list<sapling_transaction<8>>;
+
   /** FA1.2 transfer parameter format */
-  export type FA1_2_Transfer = {
-    /* @annot from */
-    from_: address;
-    /* @annot to */
-    to_: address;
-    value: nat;
-  };
+  export type FA1_2_Transfer =
+    // @layout comb
+    {
+      @annot("from") from_: address;
+      @annot("to") to_: address;
+      value: nat;
+    };
   /** Accumulator for fold: [operations, storage] */
   type Accumulator = [list<operation>, Storage];
   // ============================================================================
@@ -35,7 +38,7 @@ export namespace Sapling_Set_FA1_2 {
   /**
    * Process a single sapling transaction based on its balance:
    *   - tx_balance > 0: Unshield (send tokens to recipient)
-   *   - tx_balance < 0: Shield (receive tokens from sender)
+   *   - tx_balance < 0: Shield (receive tokens from source)
    *   - tx_balance = 0: Private transfer (no token movement)
    */
   const handle_tx_balance = (
@@ -74,7 +77,7 @@ export namespace Sapling_Set_FA1_2 {
     if (Option.is_some(Bytes.unpack(bound_data) as option<key_hash>)) {
       failwith("UNEXPECTED_RECIPIENT");
     }
-    // SHIELD: Receive tokens from sender to pool
+    // SHIELD: Receive tokens from source to pool
     if (tx_balance < 0) {
       const transfer_param: FA1_2_Transfer = {
         from_: source_address,
@@ -115,6 +118,7 @@ export namespace Sapling_Set_FA1_2 {
       };
     // Cache addresses for use in fold
     const self_address = Tezos.get_self_address();
+    // source_address is the original transaction signer
     const source_address = Tezos.get_source();
     // Process all sapling transactions
     const initial_acc: Accumulator = [list([]), s];
