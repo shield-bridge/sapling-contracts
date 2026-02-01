@@ -9,6 +9,35 @@
  *   - Tez (native)
  *   - FA1.2 tokens
  *   - FA2 tokens
+ *
+ * ## Payer Authorization Model
+ *
+ * The Factory supports flexible payer designation via the optional `payer` field
+ * in Transaction_Item. This field is passed through to the individual Set contracts
+ * (FA1.2 and FA2) where the actual validation occurs.
+ *
+ * ### Default Behavior
+ *
+ * If `payer` is None (or omitted), the Set contracts default to using `source`
+ * (the original transaction initiator) as the payer. This is the standard flow
+ * where users shield their own tokens.
+ *
+ * ### Intermediary Support
+ *
+ * If `payer` is Some(address), the Set contracts validate that the specified
+ * payer is either `sender` or `source`. This enables:
+ *   - Direct user calls (sender == source == user)
+ *   - Factory routing (sender == factory, source == user)
+ *   - Intermediary contracts paying on behalf of users (sender == intermediary)
+ *
+ * ### Security Notes
+ *
+ * 1. The Factory itself does not validate payer - it delegates to Set contracts
+ * 2. Set contracts enforce that payer must be sender or source
+ * 3. Token contracts provide defense-in-depth via approval/operator mechanisms
+ * 4. XTZ transactions use Tezos.get_amount() and don't use the payer field
+ *
+ * See individual Set contract documentation for detailed attack vector analysis.
  */
 
 #import "./sapling_set_tez.jsligo" "Set_Tez"
@@ -25,9 +54,10 @@ type FA1_2_Approve = { spender: address; value: nat };
 
 /** FA2 update_operators parameter types (for validation) */
 type FA2_Operator = { owner: address; operator: address; token_id: nat };
-type FA2_Update_Operator = 
-  | ["Add_operator", FA2_Operator]
-  | ["Remove_operator", FA2_Operator];
+
+type FA2_Update_Operator =
+  ["Add_operator", FA2_Operator] | ["Remove_operator", FA2_Operator];
+
 type FA2_Update_Operators = list<FA2_Update_Operator>;
 
 /** Key for FA2 token lookup */
@@ -49,7 +79,15 @@ export namespace Sapling_Factory {
 
   };
   type Return = [list<operation>, Storage];
-  /** Parameter for routing transactions to set contracts */
+  /**
+   * Parameter for routing transactions to set contracts
+   *
+   * @param txns - Sapling transactions to process
+   * @param contract - Token contract address (None = Tez)
+   * @param token_id - Token ID (for FA2 only)
+   * @param amount - Amount in mutez (for Tez shielding)
+   * @param payer - Optional payer address for FA1.2/FA2 shielding (defaults to source)
+   */
   type Transaction_Item = {
     txns: list<sapling_transaction<8>>; // Sapling transactions to process
 
@@ -58,6 +96,8 @@ export namespace Sapling_Factory {
     token_id: option<nat>; // Token ID (for FA2 only)
 
     amount: option<nat>; // Amount in mutez (for Tez shielding)
+
+    payer: option<address>; // Optional payer for token shielding (defaults to source)
 
   };
   type Transaction_List = list<Transaction_Item>;
@@ -71,6 +111,13 @@ export namespace Sapling_Factory {
   // ==========================================================================
   // Helper Functions
   // ==========================================================================
+  /** Reverse a list of operations to correct execution order */
+  const reverse_ops = (l: list<operation>): list<operation> =>
+    List.fold(
+      ([acc, item]: [list<operation>, operation]) => list([item, ...acc]),
+      l,
+      list([]) as list<operation>
+    );
   /** Route a transaction to the Tez set contract */
   const process_tez_txn = (
     txns: list<sapling_transaction<8>>,
@@ -92,6 +139,7 @@ export namespace Sapling_Factory {
   const process_fa1_2_txn = (
     txns: list<sapling_transaction<8>>,
     contract_addr: address,
+    payer: option<address>,
     storage: Storage
   ): operation => {
     const set_address =
@@ -102,13 +150,15 @@ export namespace Sapling_Factory {
     const set_contract =
       Tezos.get_contract_with_error(set_address, "SET_ENTRYPOINT_NOT_FOUND") as
         contract<Set_FA1_2.Sapling_Set_FA1_2.Parameter>;
-    return Tezos.Next.Operation.transaction(txns, 0 as tez, set_contract);
+    const param: Set_FA1_2.Sapling_Set_FA1_2.Parameter = { txns, payer };
+    return Tezos.Next.Operation.transaction(param, 0 as tez, set_contract);
   }
   /** Route a transaction to an FA2 set contract */
   const process_fa2_txn = (
     txns: list<sapling_transaction<8>>,
     contract_addr: address,
     token_id: nat,
+    payer: option<address>,
     storage: Storage
   ): operation => {
     const key: FA2_Token_Key = { contract: contract_addr, token_id: token_id };
@@ -120,11 +170,12 @@ export namespace Sapling_Factory {
     const set_contract =
       Tezos.get_contract_with_error(set_address, "SET_ENTRYPOINT_NOT_FOUND") as
         contract<Set_FA2.Sapling_Set_FA2.Parameter>;
-    return Tezos.Next.Operation.transaction(txns, 0 as tez, set_contract);
+    const param: Set_FA2.Sapling_Set_FA2.Parameter = { txns, payer };
+    return Tezos.Next.Operation.transaction(param, 0 as tez, set_contract);
   }
   /** Route a transaction to the appropriate set contract based on token type */
   const process_txn = (txn: Transaction_Item, storage: Storage): operation => {
-    const { contract, token_id, txns, amount } = txn;
+    const { contract, token_id, txns, amount, payer } = txn;
     // No contract = Tez transaction
     if (Option.is_none(contract)) {
       return process_tez_txn(txns, amount, storage);
@@ -132,11 +183,11 @@ export namespace Sapling_Factory {
     const contract_addr = Option.value_with_error("UNEXPECTED_ERROR", contract);
     // No token_id = FA1.2 transaction
     if (Option.is_none(token_id)) {
-      return process_fa1_2_txn(txns, contract_addr, storage);
+      return process_fa1_2_txn(txns, contract_addr, payer, storage);
     }
     // Has token_id = FA2 transaction
     const tid = Option.value_with_error("UNEXPECTED_ERROR", token_id);
-    return process_fa2_txn(txns, contract_addr, tid, storage);
+    return process_fa2_txn(txns, contract_addr, tid, payer, storage);
   }
   // ==========================================================================
   // Entry Points
@@ -150,26 +201,18 @@ export namespace Sapling_Factory {
 
   @entry
   const @default = (txn_list: Transaction_List, storage: Storage): Return => {
-    // Validate XTZ amount if any is sent
-    if (Tezos.get_amount() > (0 as tez)) {
-      let tez_tx_count = 0;
-      let total_tez_amount = 0 as nat;
-      for (const txn of txn_list) {
-        if (Option.is_none(txn.contract)) {
-          tez_tx_count = tez_tx_count + 1;
-          const amt = Option.value(0 as nat, txn.amount);
-          total_tez_amount = total_tez_amount + amt;
-        }
+    // Calculate total Tez amount from all Tez transactions
+    let total_tez_amount = 0 as nat;
+    for (const txn of txn_list) {
+      if (Option.is_none(txn.contract)) {
+        const amt = Option.value(0 as nat, txn.amount);
+        total_tez_amount = total_tez_amount + amt;
       }
-      // XTZ sent but no Tez transactions
-      if (tez_tx_count == 0) {
-        failwith("XTZ_SENT_WITHOUT_TEZ_TRANSACTION");
-      }
-      // Validate amounts match
-      const expected_mutez = Tezos.get_amount() / (1 as mutez);
-      if (total_tez_amount != expected_mutez) {
-        failwith("TEZ_AMOUNT_MISMATCH");
-      }
+    }
+    // Validate total Tez amount matches attached XTZ
+    const expected_mutez = Tezos.get_amount() / (1 as mutez);
+    if (total_tez_amount != expected_mutez) {
+      failwith("TEZ_AMOUNT_MISMATCH");
     }
     // Route each transaction to its set contract
     let all_ops: list<operation> = list([]);
@@ -177,7 +220,7 @@ export namespace Sapling_Factory {
       const op = process_txn(txn, storage);
       all_ops = list([op, ...all_ops]);
     }
-    return [all_ops, storage];
+    return [reverse_ops(all_ops), storage];
   }
   /**
    * Deploy a new set contract for a token.

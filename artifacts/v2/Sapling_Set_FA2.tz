@@ -1,4 +1,4 @@
-{ parameter (list (sapling_transaction 8)) ;
+{ parameter (pair (list %txns (sapling_transaction 8)) (option %payer address)) ;
   storage (pair (sapling_state %state 8) (pair (address %contract) (nat %token_id))) ;
   code { UNPAIR ;
          PUSH mutez 0 ;
@@ -13,11 +13,25 @@
                             (list %txs (pair (address %to_) (pair (nat %token_id) (nat %amount)))))) ;
               IF_NONE { PUSH string "TRANSFER_ENTRYPOINT_NOT_FOUND" ; FAILWITH } {} ;
               SELF_ADDRESS ;
-              SOURCE ;
+              DUP 3 ;
+              CDR ;
+              IF_NONE
+                { SOURCE }
+                { SOURCE ;
+                  DUP 2 ;
+                  COMPARE ;
+                  NEQ ;
+                  SENDER ;
+                  DUP 3 ;
+                  COMPARE ;
+                  NEQ ;
+                  AND ;
+                  IF { PUSH string "UNAUTHORIZED_PAYER" ; FAILWITH } {} } ;
               DUP 5 ;
               NIL operation ;
               PAIR ;
               DIG 4 ;
+              CAR ;
               ITER { SWAP ;
                      DUP ;
                      GET 3 ;

@@ -2,7 +2,8 @@
     (or (pair %init_token_sapling_set (address %contract) (option %token_id nat))
         (list %default
            (pair (list %txns (sapling_transaction 8))
-                 (pair (option %contract address) (pair (option %token_id nat) (option %amount nat)))))) ;
+                 (pair (option %contract address)
+                       (pair (option %token_id nat) (pair (option %amount nat) (option %payer address))))))) ;
   storage
     (pair (address %tez)
           (pair (big_map %token_fa_1_2 address address)
@@ -38,7 +39,7 @@
                  PUSH mutez 0 ;
                  NONE key_hash ;
                  CREATE_CONTRACT
-                   { parameter (list (sapling_transaction 8)) ;
+                   { parameter (pair (list %txns (sapling_transaction 8)) (option %payer address)) ;
                      storage (pair (sapling_state %state 8) (address %contract)) ;
                      code { UNPAIR ;
                             PUSH mutez 0 ;
@@ -51,11 +52,25 @@
                                  CONTRACT %transfer (pair (address %from) (pair (address %to) (nat %value))) ;
                                  IF_NONE { PUSH string "TRANSFER_ENTRYPOINT_NOT_FOUND" ; FAILWITH } {} ;
                                  SELF_ADDRESS ;
-                                 SOURCE ;
+                                 DUP 3 ;
+                                 CDR ;
+                                 IF_NONE
+                                   { SOURCE }
+                                   { SOURCE ;
+                                     DUP 2 ;
+                                     COMPARE ;
+                                     NEQ ;
+                                     SENDER ;
+                                     DUP 3 ;
+                                     COMPARE ;
+                                     NEQ ;
+                                     AND ;
+                                     IF { PUSH string "UNAUTHORIZED_PAYER" ; FAILWITH } {} } ;
                                  DIG 4 ;
                                  NIL operation ;
                                  PAIR ;
                                  DIG 4 ;
+                                 CAR ;
                                  ITER { SWAP ;
                                         DUP ;
                                         GET 3 ;
@@ -170,7 +185,7 @@
                  PUSH mutez 0 ;
                  NONE key_hash ;
                  CREATE_CONTRACT
-                   { parameter (list (sapling_transaction 8)) ;
+                   { parameter (pair (list %txns (sapling_transaction 8)) (option %payer address)) ;
                      storage (pair (sapling_state %state 8) (pair (address %contract) (nat %token_id))) ;
                      code { UNPAIR ;
                             PUSH mutez 0 ;
@@ -185,11 +200,25 @@
                                                (list %txs (pair (address %to_) (pair (nat %token_id) (nat %amount)))))) ;
                                  IF_NONE { PUSH string "TRANSFER_ENTRYPOINT_NOT_FOUND" ; FAILWITH } {} ;
                                  SELF_ADDRESS ;
-                                 SOURCE ;
+                                 DUP 3 ;
+                                 CDR ;
+                                 IF_NONE
+                                   { SOURCE }
+                                   { SOURCE ;
+                                     DUP 2 ;
+                                     COMPARE ;
+                                     NEQ ;
+                                     SENDER ;
+                                     DUP 3 ;
+                                     COMPARE ;
+                                     NEQ ;
+                                     AND ;
+                                     IF { PUSH string "UNAUTHORIZED_PAYER" ; FAILWITH } {} } ;
                                  DUP 5 ;
                                  NIL operation ;
                                  PAIR ;
                                  DIG 4 ;
+                                 CAR ;
                                  ITER { SWAP ;
                                         DUP ;
                                         GET 3 ;
@@ -285,42 +314,27 @@
              NIL operation ;
              DIG 2 ;
              CONS }
-           { PUSH mutez 0 ;
+           { PUSH nat 0 ;
+             DUP 2 ;
+             ITER { DUP ;
+                    GET 3 ;
+                    IF_NONE { GET 7 ; IF_NONE { PUSH nat 0 } {} ; ADD } { DROP 2 } } ;
+             PUSH mutez 1 ;
              AMOUNT ;
+             EDIV ;
+             IF_NONE { PUSH string "DIV by 0" ; FAILWITH } { CAR } ;
              COMPARE ;
-             GT ;
-             IF { PUSH int 0 ;
-                  PUSH nat 0 ;
-                  DUP 3 ;
-                  ITER { DUP ;
-                         GET 3 ;
-                         IF_NONE
-                           { PUSH int 1 ;
-                             DIG 3 ;
-                             ADD ;
-                             DUG 2 ;
-                             GET 6 ;
-                             IF_NONE { PUSH nat 0 } {} ;
-                             ADD }
-                           { DROP 2 } } ;
-                  SWAP ;
-                  EQ ;
-                  IF { PUSH string "XTZ_SENT_WITHOUT_TEZ_TRANSACTION" ; FAILWITH } {} ;
-                  PUSH mutez 1 ;
-                  AMOUNT ;
-                  EDIV ;
-                  IF_NONE { PUSH string "DIV by 0" ; FAILWITH } { CAR } ;
-                  COMPARE ;
-                  NEQ ;
-                  IF { PUSH string "TEZ_AMOUNT_MISMATCH" ; FAILWITH } {} }
-                {} ;
+             NEQ ;
+             IF { PUSH string "TEZ_AMOUNT_MISMATCH" ; FAILWITH } {} ;
              NIL operation ;
              SWAP ;
-             ITER { UNPAIR 4 ;
+             ITER { UNPAIR 5 ;
                     DUP 2 ;
                     IF_NONE
                       { DUG 2 ;
                         DROP 2 ;
+                        DIG 2 ;
+                        DROP ;
                         DUP 4 ;
                         CAR ;
                         CONTRACT (list (sapling_transaction 8)) ;
@@ -340,35 +354,50 @@
                         IF_NONE
                           { DIG 2 ;
                             DROP ;
-                            DUP 4 ;
+                            DUP 5 ;
                             GET 3 ;
                             SWAP ;
                             GET ;
                             IF_NONE { PUSH string "SAPLING_SET_NOT_FOUND" ; FAILWITH } {} ;
-                            CONTRACT (list (sapling_transaction 8)) ;
+                            CONTRACT (pair (list %txns (sapling_transaction 8)) (option %payer address)) ;
                             IF_NONE { PUSH string "SET_ENTRYPOINT_NOT_FOUND" ; FAILWITH } {} ;
                             PUSH mutez 0 ;
-                            DIG 2 ;
+                            DIG 3 ;
+                            DIG 3 ;
+                            PAIR ;
                             TRANSFER_TOKENS }
                           { DROP ;
                             DIG 2 ;
                             IF_NONE { PUSH string "UNEXPECTED_ERROR" ; FAILWITH } {} ;
-                            DUP 5 ;
+                            DUP 6 ;
                             GET 4 ;
                             SWAP ;
                             DIG 2 ;
                             PAIR ;
                             GET ;
                             IF_NONE { PUSH string "SAPLING_SET_NOT_FOUND" ; FAILWITH } {} ;
-                            CONTRACT (list (sapling_transaction 8)) ;
+                            CONTRACT (pair (list %txns (sapling_transaction 8)) (option %payer address)) ;
                             IF_NONE { PUSH string "SET_ENTRYPOINT_NOT_FOUND" ; FAILWITH } {} ;
                             PUSH mutez 0 ;
-                            DIG 2 ;
+                            DIG 3 ;
+                            DIG 3 ;
+                            PAIR ;
                             TRANSFER_TOKENS } } ;
                     NIL operation ;
                     DIG 2 ;
                     NIL operation ;
                     SWAP ;
+                    ITER { CONS } ;
+                    ITER { CONS } ;
+                    SWAP ;
+                    CONS } ;
+             SWAP ;
+             NIL operation ;
+             DIG 2 ;
+             ITER { SWAP ;
+                    NIL operation ;
+                    NIL operation ;
+                    DIG 2 ;
                     ITER { CONS } ;
                     ITER { CONS } ;
                     SWAP ;

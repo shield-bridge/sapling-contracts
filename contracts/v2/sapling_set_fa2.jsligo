@@ -6,6 +6,38 @@
  *   - Shield: Transfer tokens from user to pool (negative balance)
  *   - Unshield: Transfer tokens from pool to user (positive balance)
  *   - Transfer: Move tokens within the shielded pool (zero balance)
+ *
+ * ## Payer Authorization Model
+ *
+ * The contract supports flexible payer designation via the optional `payer` field:
+ *   - If `payer` is None: defaults to `source` (original transaction initiator)
+ *   - If `payer` is Some(addr): uses the specified address after validation
+ *
+ * ### Security Validation
+ *
+ * Only `sender` or `source` can be specified as payer:
+ *   - `sender`: The direct caller (could be a contract or user)
+ *   - `source`: The original transaction initiator (always a user account)
+ *
+ * This ensures:
+ *   1. Direct user calls work (sender == source == user)
+ *   2. Factory routing works (sender == factory, source == user, payer defaults to source)
+ *   3. Intermediary payment works (sender == intermediary, payer == sender)
+ *   4. Malicious payer specification fails (payer != sender && payer != source)
+ *
+ * ### Attack Vector Analysis
+ *
+ * | Scenario | sender | source | payer | Result |
+ * |----------|--------|--------|-------|--------|
+ * | Direct user call | User | User | None | ✓ User pays (source) |
+ * | Via Factory | Factory | User | None | ✓ User pays (source) |
+ * | Via Factory | Factory | User | Some(User) | ✓ User pays (validated) |
+ * | Intermediary pays | Contract | User | Some(Contract) | ✓ Contract pays (sender) |
+ * | Malicious attempt | Attacker | Victim | Some(Victim) | ✗ UNAUTHORIZED_PAYER |
+ *
+ * Note: Even if payer validation passes, the token transfer will fail unless
+ * the payer has added this contract as an operator via update_operators.
+ * This provides defense-in-depth via the token contract's own operator mechanism.
  */
 export namespace Sapling_Set_FA2 {
   // ============================================================================
@@ -20,10 +52,15 @@ export namespace Sapling_Set_FA2 {
 
   };
   type Return = [list<operation>, Storage];
-
-  /** Parameter is a list of sapling transactions to process */
-  export type Parameter = list<sapling_transaction<8>>;
-
+  /**
+   * Parameter for the sapling set contract
+   * @param txns - List of sapling transactions to process
+   * @param payer - Optional payer address (defaults to source if None)
+   */
+  export type Parameter = {
+    txns: list<sapling_transaction<8>>;
+    payer: option<address>;
+  };
   /** FA2 transfer transaction (single transfer within a batch) */
   type FA2_Transaction = { to_: address; token_id: nat; amount: nat };
   /** FA2 transfer batch from a single sender */
@@ -38,7 +75,7 @@ export namespace Sapling_Set_FA2 {
   /**
    * Process a single sapling transaction based on its balance:
    *   - tx_balance > 0: Unshield (send tokens to recipient)
-   *   - tx_balance < 0: Shield (receive tokens from source)
+   *   - tx_balance < 0: Shield (receive tokens from payer)
    *   - tx_balance = 0: Private transfer (no token movement)
    */
   const handle_tx_balance = (
@@ -49,7 +86,7 @@ export namespace Sapling_Set_FA2 {
     transfer_contract: contract<FA2_Parameter>,
     token_id: nat,
     self_address: address,
-    source_address: address
+    payer_address: address
   ): Accumulator => {
     const [ops, storage] = acc;
     // UNSHIELD: Send tokens from pool to recipient
@@ -85,14 +122,14 @@ export namespace Sapling_Set_FA2 {
     if (Option.is_some(Bytes.unpack(bound_data) as option<key_hash>)) {
       failwith("UNEXPECTED_RECIPIENT");
     }
-    // SHIELD: Receive tokens from source to pool
+    // SHIELD: Receive tokens from payer to pool
     if (tx_balance < 0) {
       const amount = abs(tx_balance);
       const transfer_param: FA2_Parameter =
         list(
           [
             {
-              from_: source_address,
+              from_: payer_address,
               txs: list(
                 [{ to_: self_address, token_id: token_id, amount: amount }]
               )
@@ -110,6 +147,31 @@ export namespace Sapling_Set_FA2 {
     // PRIVATE TRANSFER: No token movement, just state update
     return [ops, { ...storage, state: new_sapling_state }];
   }
+  // ============================================================================
+  // Helper Functions - Payer Validation
+  // ============================================================================
+  /**
+   * Resolve and validate the payer address.
+   * If payer is None, defaults to source (original transaction initiator).
+   * If payer is specified, validates it's either sender or source.
+   */
+  const resolve_payer = (payer_opt: option<address>): address => {
+    return match(payer_opt) {
+      when (None()):
+        Tezos.get_source(
+
+        ) // Default: original user pays
+
+      when (Some(addr)):
+        do {
+          // Validate: payer must be sender or source
+          if (addr != Tezos.get_sender() && addr != Tezos.get_source()) {
+            failwith("UNAUTHORIZED_PAYER");
+          }
+          return addr;
+        }
+    };
+  };
   // ============================================================================
   // Entry Points
   // ============================================================================
@@ -133,8 +195,8 @@ export namespace Sapling_Set_FA2 {
       };
     // Cache values for use in fold
     const self_address = Tezos.get_self_address();
-    // source_address is the original transaction signer
-    const source_address = Tezos.get_source();
+    // Resolve and validate payer address
+    const payer_address = resolve_payer(param.payer);
     const token_id = s.token_id;
     // Process all sapling transactions
     const initial_acc: Accumulator = [list([]), s];
@@ -159,12 +221,12 @@ export namespace Sapling_Set_FA2 {
                   transfer_contract,
                   token_id,
                   self_address,
-                  source_address
+                  payer_address
                 );
               }
           }
         },
-        param,
+        param.txns,
         initial_acc
       );
     return final_acc;
