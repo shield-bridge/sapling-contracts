@@ -8,5 +8,6 @@ const default_storage: Contract.Sapling_Factory.Storage = {
   token_fa_1_2: (Big_map.empty as big_map<address, address>),
   token_fa_2: (
     Big_map.empty as big_map<{ contract: address, token_id: nat }, address>
-  )
+  ),
+  registered_sets: Big_set.literal(list(["KT1KzAPQdpziH3bxxJXQNmNQA46oo8tnDQfj" as address])),
 }

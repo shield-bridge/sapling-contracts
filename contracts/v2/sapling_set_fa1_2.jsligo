@@ -1,43 +1,40 @@
 /**
  * Sapling Set Contract for FA1.2 Tokens
  *
- * This contract manages a Sapling shielded pool for a single FA1.2 token.
+ * This contract manages a Sapling shielded set for a single FA1.2 token.
  * It supports three operations:
- *   - Shield: Transfer tokens from user to pool (negative balance)
- *   - Unshield: Transfer tokens from pool to user (positive balance)
- *   - Transfer: Move tokens within the shielded pool (zero balance)
+ *   - Shield: Transfer tokens from sender to set (negative balance)
+ *   - Unshield: Transfer tokens from set to recipient (positive balance)
+ *   - Transfer: Move tokens within the shielded set (zero balance)
  *
- * ## Payer Authorization Model
+ * ## Security Model
  *
- * The contract supports flexible payer designation via the optional `payer` field:
- *   - If `payer` is None: defaults to `source` (original transaction initiator)
- *   - If `payer` is Some(addr): uses the specified address after validation
+ * The payer for shield operations is ALWAYS `Tezos.get_sender()` — the direct
+ * caller of this contract. This ensures:
  *
- * ### Security Validation
+ *   1. Direct calls: sender = user, Set pulls from user
+ *   2. Via intermediary: sender = intermediary, Set pulls
+ *      from intermediary (which must hold the tokens)
+ *   3. Malicious intermediary cannot steal user tokens — can only spend its own
  *
- * Only `sender` or `source` can be specified as payer:
- *   - `sender`: The direct caller (could be a contract or user)
- *   - `source`: The original transaction initiator (always a user account)
+ * The sender must have approved this contract to spend their tokens via the
+ * FA1.2 `approve` mechanism before calling this contract to shield.
  *
- * This ensures:
- *   1. Direct user calls work (sender == source == user)
- *   2. Factory routing works (sender == factory, source == user, payer defaults to source)
- *   3. Intermediary payment works (sender == intermediary, payer == sender)
- *   4. Malicious payer specification fails (payer != sender && payer != source)
+ * ### Usage Patterns
  *
- * ### Attack Vector Analysis
+ * **Direct call (user → Set):**
+ *   1. User calls FA1.2: approve(Set, amount)
+ *   2. User calls Set: default(txns)
+ *   3. Set pulls from user (sender)
  *
- * | Scenario | sender | source | payer | Result |
- * |----------|--------|--------|-------|--------|
- * | Direct user call | User | User | None | ✓ User pays (source) |
- * | Via Factory | Factory | User | None | ✓ User pays (source) |
- * | Via Factory | Factory | User | Some(User) | ✓ User pays (validated) |
- * | Intermediary pays | Contract | User | Some(Contract) | ✓ Contract pays (sender) |
- * | Malicious attempt | Attacker | Victim | Some(Victim) | ✗ UNAUTHORIZED_PAYER |
+ * **Via intermediary (user → Intermediary → Set):**
+ *   1. User approves Intermediary to spend their tokens
+ *   2. User calls Intermediary
+ *   3. Intermediary pulls tokens from user to itself
+ *   4. Intermediary approves Set
+ *   5. Intermediary calls Set: default(txns)
+ *   6. Set pulls from Intermediary (sender)
  *
- * Note: Even if payer validation passes, the token transfer will fail unless
- * the payer has approved this contract to spend their tokens. This provides
- * defense-in-depth via the token contract's own approval mechanism.
  */
 export namespace Sapling_Set_FA1_2 {
   // ============================================================================
@@ -50,26 +47,9 @@ export namespace Sapling_Set_FA1_2 {
 
   };
   type Return = [list<operation>, Storage];
-  /**
-   * Parameter for the sapling set contract
-   * @param txns - List of sapling transactions to process
-   * @param payer - Optional payer address (defaults to source if None)
-   */
-  export type Parameter = {
-    txns: list<sapling_transaction<8>>;
-    payer: option<address>;
-  };
   /** FA1.2 transfer parameter format */
   export type FA1_2_Transfer = // @layout comb
-    {
-    @annot("from")
-
-    from_: address;
-    @annot("to")
-
-    to_: address;
-    value: nat;
-  };
+   { @annot("from")  from_: address; @annot("to")  to_: address; value: nat; };
   /** Accumulator for fold: [operations, storage] */
   type Accumulator = [list<operation>, Storage];
   // ============================================================================
@@ -78,7 +58,7 @@ export namespace Sapling_Set_FA1_2 {
   /**
    * Process a single sapling transaction based on its balance:
    *   - tx_balance > 0: Unshield (send tokens to recipient)
-   *   - tx_balance < 0: Shield (receive tokens from payer)
+   *   - tx_balance < 0: Shield (receive tokens from sender)
    *   - tx_balance = 0: Private transfer (no token movement)
    */
   const handle_tx_balance = (
@@ -88,10 +68,10 @@ export namespace Sapling_Set_FA1_2 {
     acc: Accumulator,
     transfer_contract: contract<FA1_2_Transfer>,
     self_address: address,
-    payer_address: address
+    sender_address: address
   ): Accumulator => {
     const [ops, storage] = acc;
-    // UNSHIELD: Send tokens from pool to recipient
+    // UNSHIELD: Send tokens from set to recipient
     if (tx_balance > 0) {
       const recipient_key_hash =
         Option.value_with_error(
@@ -117,10 +97,10 @@ export namespace Sapling_Set_FA1_2 {
     if (Option.is_some(Bytes.unpack(bound_data) as option<key_hash>)) {
       failwith("UNEXPECTED_RECIPIENT");
     }
-    // SHIELD: Receive tokens from payer to pool
+    // SHIELD: Receive tokens from sender to set
     if (tx_balance < 0) {
       const transfer_param: FA1_2_Transfer = {
-        from_: payer_address,
+        from_: sender_address,
         to_: self_address,
         value: abs(tx_balance)
       };
@@ -136,36 +116,11 @@ export namespace Sapling_Set_FA1_2 {
     return [ops, { ...storage, state: new_sapling_state }];
   }
   // ============================================================================
-  // Helper Functions - Payer Validation
-  // ============================================================================
-  /**
-   * Resolve and validate the payer address.
-   * If payer is None, defaults to source (original transaction initiator).
-   * If payer is specified, validates it's either sender or source.
-   */
-  const resolve_payer = (payer_opt: option<address>): address => {
-    return match(payer_opt) {
-      when (None()):
-        Tezos.get_source(
-
-        ) // Default: original user pays
-
-      when (Some(addr)):
-        do {
-          // Validate: payer must be sender or source
-          if (addr != Tezos.get_sender() && addr != Tezos.get_source()) {
-            failwith("UNAUTHORIZED_PAYER");
-          }
-          return addr;
-        }
-    };
-  };
-  // ============================================================================
   // Entry Points
   // ============================================================================
 
   @entry
-  const @default = (param: Parameter, s: Storage): Return => {
+  const @default = (txns: list<sapling_transaction<8>>, s: Storage): Return => {
     // Reject any XTZ sent to this contract
     if (Tezos.get_amount() > (0 as tez)) {
       return failwith("UNEXPECTED_XTZ_AMOUNT");
@@ -183,8 +138,8 @@ export namespace Sapling_Set_FA1_2 {
       };
     // Cache addresses for use in fold
     const self_address = Tezos.get_self_address();
-    // Resolve and validate payer address
-    const payer_address = resolve_payer(param.payer);
+    // Always use sender as the payer — no configurable payer
+    const sender_address = Tezos.get_sender();
     // Process all sapling transactions
     const initial_acc: Accumulator = [list([]), s];
     const final_acc =
@@ -207,12 +162,12 @@ export namespace Sapling_Set_FA1_2 {
                   acc,
                   transfer_contract,
                   self_address,
-                  payer_address
+                  sender_address
                 );
               }
           }
         },
-        param.txns,
+        txns,
         initial_acc
       );
     return final_acc;
