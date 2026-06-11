@@ -1,0 +1,244 @@
+/**
+ * Relay Registry Contract (shield-relay/1 discovery)
+ *
+ * A permissionless, ownerless directory of Shield Bridge privacy relays. Anyone may
+ * register a relay; any client may read the list trustlessly over RPC. There is NO admin
+ * key — no pause, no force-removal, no parameter mutation after origination. That is the
+ * point: a registry that nobody can censor is what makes permissionless relay discovery safe.
+ *
+ * ## What this stores (and what it deliberately does NOT)
+ *
+ * It stores DISCOVERY facts only — WHO operates a relay, WHERE its descriptor lives, and
+ * which worker tz1s its fees are paid to. It stores NO reputation, NO scores, NO uptime.
+ *
+ * Reputation cannot be computed on-chain for a privacy relay: the user's operation is an
+ * opaque Sapling proof, and the two-phase distinct-worker design deliberately unlinks the
+ * fee payment from the broadcast — so the chain cannot witness "relay X completed job Y."
+ * Instead, the *client* computes reputation off-chain from two sources this contract enables:
+ *
+ *   1. Proof-of-Operating-History (PoH) — PUBLIC. Because Phase-1 fees are public unshields
+ *      to the `worker_keys` bound here, anyone can count a relay's fee-receipts + age from
+ *      chain data alone. Faking PoH costs exactly as much as having it (real gas, real time).
+ *   2. First-party local history — PRIVATE, on the user's device, and always the dominant
+ *      signal. A relay with great PoH that burned *your* fee ranks below one that served you.
+ *
+ * So: this contract answers "who / where" (and binds worker keys so PoH is attributable);
+ * the client answers "how good." The contract stays trivial by never touching reputation.
+ *
+ * ## Per-network deployment
+ *
+ * One registry per network (mainnet, shadownet), its KT1 baked into the client alongside the
+ * factory address. Being in the mainnet registry IS the network assertion — no `network`
+ * field needed. The client still hard-checks each relay's live `/info` network before paying.
+ *
+ * ## Lifecycle
+ *
+ *   register   — lock a refundable deposit, bind worker_keys (must be globally unclaimed),
+ *                appear in `index`. Caller (Tezos.get_sender) is the operator identity;
+ *                control is proven by being able to call update/deregister from it.
+ *   update     — change only the descriptor_url (worker_keys are immutable; rotate via
+ *                deregister + re-register so the claimed-workers set stays simple).
+ *   deregister — leave `index` immediately (stop being discovered) and start the unbond timer.
+ *   withdraw   — after the timer, refund the deposit and free the worker_keys + entry.
+ *
+ * ## Known residual (documented, bounded)
+ *
+ * An operator can bind worker tz1s it does NOT control IF those tz1s are not already claimed
+ * by another registered relay — borrowing an *unregistered* relay's fee history to inflate
+ * its own PoH. `claimed_workers` blocks the registered-vs-registered case; the rest is
+ * bounded-loss-tolerable (worst case: a user picks a flatteringly-ranked relay that then
+ * refuses = one fee) and corrected fast by the dominant first-party local history. A future
+ * hardening: require the relay to prove worker-key custody via a /challenge the client checks.
+ */
+
+export namespace Relay_Registry {
+  // ==========================================================================
+  // Types
+  // ==========================================================================
+  export type Entry = {
+    operator: address; // tz1 that registered + controls this entry (== sender at register)
+
+    worker_keys: set<key_hash>; // tz1s Phase-1 fees are paid to — makes PoH attributable
+
+    descriptor_url: string; // https origin serving /info + /.well-known/shield-relay.json
+
+    registered_at: timestamp; // when listed (weak hint; PoH age is chain-derived, stronger)
+
+    deposit: tez; // refundable anti-spam deposit (NOT slashable — refusal is unprovable)
+
+    unbond_at: option<timestamp>; // set on deregister; withdraw allowed once now >= this
+
+  };
+
+  export type Storage = {
+    relays: big_map<address, Entry>; // operator -> entry (per-entry lazy reads)
+
+    index: set<address>; // live operators — a PLAIN set so one storage read enumerates all
+
+    claimed_workers: big_set<key_hash>; // every bound worker tz1 — enforces global uniqueness
+
+    min_deposit: tez; // immutable floor (may be 0 — storage burn is itself a spam cost)
+
+    unbond_period: int; // immutable; seconds a deregistered entry stays slashing-exposed
+
+  };
+
+  type Return = [list<operation>, Storage];
+
+  type Register_Param = {
+    worker_keys: set<key_hash>;
+    descriptor_url: string;
+  };
+
+  type Update_Param = { descriptor_url: string };
+
+  // ==========================================================================
+  // Helpers
+  // ==========================================================================
+  /** Claim every worker key, failing if any is already bound by another relay. */
+  const claim_workers = (
+    workers: set<key_hash>,
+    claimed: big_set<key_hash>
+  ): big_set<key_hash> =>
+    Set.fold(
+      ([acc, w]: [big_set<key_hash>, key_hash]): big_set<key_hash> => {
+        if (Big_set.mem(w, acc)) {
+          return failwith("WORKER_ALREADY_CLAIMED");
+        };
+        return Big_set.add(w, acc);
+      },
+      workers,
+      claimed
+    );
+
+  /** Release every worker key on withdraw so a future operator may bind them. */
+  const free_workers = (
+    workers: set<key_hash>,
+    claimed: big_set<key_hash>
+  ): big_set<key_hash> =>
+    Set.fold(
+      ([acc, w]: [big_set<key_hash>, key_hash]): big_set<key_hash> =>
+        Big_set.remove(w, acc),
+      workers,
+      claimed
+    );
+
+  // ==========================================================================
+  // Views
+  // ==========================================================================
+  /** Full entry for an operator (None if never registered or already withdrawn). */
+  @view
+  const get_relay = (op: address, s: Storage): option<Entry> =>
+    Big_map.find_opt(op, s.relays);
+
+  /** True iff the operator is currently listed (in `index`, i.e. not deregistered). */
+  @view
+  const is_listed = (op: address, s: Storage): bool => Set.mem(op, s.index);
+
+  // ==========================================================================
+  // Entry Points
+  // ==========================================================================
+  /**
+   * Register a relay. The sent XTZ (>= min_deposit) is the refundable anti-spam deposit.
+   * worker_keys must be non-empty and globally unclaimed.
+   */
+  @entry
+  const register = (p: Register_Param, s: Storage): Return => {
+    const operator = Tezos.get_sender();
+    if (Big_map.mem(operator, s.relays)) {
+      return failwith("ALREADY_REGISTERED");
+    };
+    if (Tezos.get_amount() < s.min_deposit) {
+      return failwith("DEPOSIT_BELOW_MIN");
+    };
+    if (Set.size(p.worker_keys) == (0 as nat)) {
+      return failwith("NO_WORKER_KEYS");
+    };
+    const claimed = claim_workers(p.worker_keys, s.claimed_workers);
+    const entry: Entry = {
+      operator,
+      worker_keys: p.worker_keys,
+      descriptor_url: p.descriptor_url,
+      registered_at: Tezos.get_now(),
+      deposit: Tezos.get_amount(),
+      unbond_at: None() as option<timestamp>,
+    };
+    return [
+      list([]) as list<operation>,
+      {
+        ...s,
+        relays: Big_map.add(operator, entry, s.relays),
+        index: Set.add(operator, s.index),
+        claimed_workers: claimed,
+      },
+    ];
+  };
+
+  /** Update the descriptor URL. worker_keys + deposit are immutable; rotate via re-register. */
+  @entry
+  const update = (p: Update_Param, s: Storage): Return => {
+    if (Tezos.get_amount() > (0 as tez)) {
+      return failwith("UNEXPECTED_XTZ_AMOUNT");
+    };
+    const operator = Tezos.get_sender();
+    const entry =
+      Option.value_with_error("NOT_REGISTERED", Big_map.find_opt(operator, s.relays));
+    if (Option.is_some(entry.unbond_at)) {
+      return failwith("DEREGISTERING");
+    };
+    const updated = { ...entry, descriptor_url: p.descriptor_url };
+    return [
+      list([]) as list<operation>,
+      { ...s, relays: Big_map.update(operator, Some(updated), s.relays) },
+    ];
+  };
+
+  /** Stop being discovered now; start the unbond timer. Deposit stays locked until withdraw. */
+  @entry
+  const deregister = (_: unit, s: Storage): Return => {
+    if (Tezos.get_amount() > (0 as tez)) {
+      return failwith("UNEXPECTED_XTZ_AMOUNT");
+    };
+    const operator = Tezos.get_sender();
+    const entry =
+      Option.value_with_error("NOT_REGISTERED", Big_map.find_opt(operator, s.relays));
+    if (Option.is_some(entry.unbond_at)) {
+      return failwith("ALREADY_DEREGISTERING");
+    };
+    const updated = { ...entry, unbond_at: Some(Tezos.get_now() + s.unbond_period) };
+    return [
+      list([]) as list<operation>,
+      {
+        ...s,
+        relays: Big_map.update(operator, Some(updated), s.relays),
+        index: Set.remove(operator, s.index),
+      },
+    ];
+  };
+
+  /** After the unbond timer elapses, refund the deposit and remove the entry. */
+  @entry
+  const withdraw = (_: unit, s: Storage): Return => {
+    if (Tezos.get_amount() > (0 as tez)) {
+      return failwith("UNEXPECTED_XTZ_AMOUNT");
+    };
+    const operator = Tezos.get_sender();
+    const entry =
+      Option.value_with_error("NOT_REGISTERED", Big_map.find_opt(operator, s.relays));
+    const unbond = Option.value_with_error("NOT_DEREGISTERED", entry.unbond_at);
+    if (Tezos.get_now() < unbond) {
+      return failwith("UNBOND_NOT_ELAPSED");
+    };
+    const dest: contract<unit> =
+      Tezos.get_contract_with_error(operator, "NO_REFUND_DEST");
+    const refund = Tezos.transaction(unit, entry.deposit, dest);
+    return [
+      list([refund]),
+      {
+        ...s,
+        relays: Big_map.remove(operator, s.relays),
+        claimed_workers: free_workers(entry.worker_keys, s.claimed_workers),
+      },
+    ];
+  };
+}

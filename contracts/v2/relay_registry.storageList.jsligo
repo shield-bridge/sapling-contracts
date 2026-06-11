@@ -1,0 +1,20 @@
+#import "relay_registry.jsligo" "Contract"
+
+// Initial origination storage for the Relay Registry.
+//
+//   min_deposit   — refundable anti-spam deposit floor. 0 relies purely on Tezos storage
+//                   burn (each entry is real burned XTZ), which is already a spam cost. Raise
+//                   it at origination for stronger Sybil resistance (it never affects funds —
+//                   it's refunded on clean exit).
+//   unbond_period — seconds a deregistered relay stays listed-removed-but-deposit-locked
+//                   before it can withdraw. 14 days = 1_209_600s.
+//
+// The registry ships EMPTY — relays add themselves via `register` (e.g. `relay register` in
+// shield-relay). There is no admin entrypoint to seed or curate it.
+const default_storage: Contract.Relay_Registry.Storage = {
+  relays: (Big_map.empty as big_map<address, Contract.Relay_Registry.Entry>),
+  index: (Set.empty as set<address>),
+  claimed_workers: (Big_set.empty as big_set<key_hash>),
+  min_deposit: (0 as tez),
+  unbond_period: (1_209_600 as int),
+};
