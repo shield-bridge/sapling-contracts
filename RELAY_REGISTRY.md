@@ -8,6 +8,18 @@ This note explains what it stores, why it stores *only* that, and how a client t
 trust ranking — because the most important design decision here is what the contract
 **deliberately does not do.**
 
+## Deployed addresses
+
+| Network | Registry KT1 | `min_deposit` | `unbond_period` |
+|---|---|---|---|
+| mainnet | `KT1AsHxHLTBLofmBJAVHVRVRxYdghaRCJcRk` | 5 XTZ | 3 days |
+| shadownet | `KT1PvhGAz7zfxiNC5KMYRXnDjbb9paEyJYNx` | 5 XTZ | 3 days |
+
+Baked into the clients: `RELAY_REGISTRY_CONFIG` (shield-bridge `src/context/constants.ts`) and
+`DEFAULT_REGISTRY` (shield-relay `src/config/schema.ts`), each overridable by env. An operator
+registering locks the 5 XTZ deposit from its operator key (pool worker 0 by default), so that
+key needs the deposit **plus** gas — see *Registering a relay*.
+
 ## Registry ≠ reputation
 
 These are two different questions, and conflating them is the trap:
@@ -44,7 +56,7 @@ storage {
   index           : set<address>               // live operators — a PLAIN set, read in ONE storage fetch
   claimed_workers : big_set<key_hash>          // every bound worker tz1 — global uniqueness
   min_deposit     : tez                         // immutable; 0 relies on storage burn as the spam cost
-  unbond_period   : int                         // immutable; seconds (default 14 days)
+  unbond_period   : int                         // immutable; seconds (deployed: 3 days)
 }
 Entry {
   operator        : address       // controls the entry (== sender at register)
