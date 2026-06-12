@@ -4,10 +4,12 @@
 // IMPORTANT: We suggest always explicitly typing your storage values:
 // E.g.: `const storage: int = 10` or `const storage: Contract.[Namespace].storage = 10`
 const default_storage: Contract.Sapling_Factory.Storage = {
-  tez: "KT1KzAPQdpziH3bxxJXQNmNQA46oo8tnDQfj" as address,
+  tez: "KT1LAgNcEFCUdSDW3nfDr81rPKJHMWeGpaLf" as address,
   token_fa_1_2: (Big_map.empty as big_map<address, address>),
   token_fa_2: (
     Big_map.empty as big_map<{ contract: address, token_id: nat }, address>
   ),
-  registered_sets: Big_set.literal(list(["KT1KzAPQdpziH3bxxJXQNmNQA46oo8tnDQfj" as address])),
+  registered_sets: Big_set.literal(
+    list(["KT1LAgNcEFCUdSDW3nfDr81rPKJHMWeGpaLf" as address])
+  ),
 }

@@ -1,0 +1,196 @@
+{ parameter
+    (or (unit %withdraw)
+        (or (unit %deregister)
+            (or (string %update)
+                (pair %register (set %worker_keys key_hash) (string %descriptor_url))))) ;
+  storage
+    (pair (big_map %relays
+             address
+             (pair (address %operator)
+                   (pair (set %worker_keys key_hash)
+                         (pair (string %descriptor_url)
+                               (pair (timestamp %registered_at)
+                                     (pair (mutez %deposit) (option %unbond_at timestamp)))))))
+          (pair (set %index address)
+                (pair (big_map %claimed_workers key_hash unit)
+                      (pair (mutez %min_deposit) (int %unbond_period))))) ;
+  code { UNPAIR ;
+         IF_LEFT
+           { DROP ;
+             PUSH mutez 0 ;
+             AMOUNT ;
+             COMPARE ;
+             GT ;
+             IF { PUSH string "UNEXPECTED_XTZ_AMOUNT" ; FAILWITH }
+                { SENDER ;
+                  DUP 2 ;
+                  CAR ;
+                  DUP 2 ;
+                  GET ;
+                  IF_NONE { PUSH string "NOT_REGISTERED" ; FAILWITH } {} ;
+                  DUP ;
+                  GET 10 ;
+                  IF_NONE { PUSH string "NOT_DEREGISTERED" ; FAILWITH } {} ;
+                  NOW ;
+                  COMPARE ;
+                  LT ;
+                  IF { PUSH string "UNBOND_NOT_ELAPSED" ; FAILWITH }
+                     { DUP 2 ;
+                       CONTRACT unit ;
+                       IF_NONE { PUSH string "NO_REFUND_DEST" ; FAILWITH } {} ;
+                       DUP 2 ;
+                       GET 9 ;
+                       UNIT ;
+                       TRANSFER_TOKENS ;
+                       DUP 4 ;
+                       DUP 5 ;
+                       CAR ;
+                       NONE (pair address
+                                  (pair (set key_hash) (pair string (pair timestamp (pair mutez (option timestamp)))))) ;
+                       DIG 5 ;
+                       UPDATE ;
+                       UPDATE 1 ;
+                       DIG 3 ;
+                       GET 5 ;
+                       DIG 3 ;
+                       GET 3 ;
+                       ITER { SWAP ; NONE unit ; DIG 2 ; UPDATE } ;
+                       UPDATE 5 ;
+                       NIL operation ;
+                       DIG 2 ;
+                       CONS ;
+                       PAIR } } }
+           { IF_LEFT
+               { DROP ;
+                 PUSH mutez 0 ;
+                 AMOUNT ;
+                 COMPARE ;
+                 GT ;
+                 IF { PUSH string "UNEXPECTED_XTZ_AMOUNT" ; FAILWITH }
+                    { SENDER ;
+                      DUP 2 ;
+                      CAR ;
+                      DUP 2 ;
+                      GET ;
+                      IF_NONE { PUSH string "NOT_REGISTERED" ; FAILWITH } {} ;
+                      DUP ;
+                      GET 10 ;
+                      IF_NONE
+                        { DUP 3 ;
+                          GET 8 ;
+                          NOW ;
+                          ADD ;
+                          SOME ;
+                          UPDATE 10 ;
+                          DUP 3 ;
+                          DUP 4 ;
+                          CAR ;
+                          DIG 2 ;
+                          SOME ;
+                          DUP 4 ;
+                          UPDATE ;
+                          UPDATE 1 ;
+                          DIG 2 ;
+                          GET 3 ;
+                          PUSH bool False ;
+                          DIG 3 ;
+                          UPDATE ;
+                          UPDATE 3 ;
+                          NIL operation ;
+                          PAIR }
+                        { PUSH string "ALREADY_DEREGISTERING" ; FAILWITH } } }
+               { IF_LEFT
+                   { PUSH mutez 0 ;
+                     AMOUNT ;
+                     COMPARE ;
+                     GT ;
+                     IF { PUSH string "UNEXPECTED_XTZ_AMOUNT" ; FAILWITH }
+                        { SENDER ;
+                          DUP 3 ;
+                          CAR ;
+                          DUP 2 ;
+                          GET ;
+                          IF_NONE { PUSH string "NOT_REGISTERED" ; FAILWITH } {} ;
+                          DUP ;
+                          GET 10 ;
+                          IF_NONE
+                            { DIG 3 ;
+                              DUP ;
+                              CAR ;
+                              DIG 2 ;
+                              DIG 4 ;
+                              UPDATE 5 ;
+                              SOME ;
+                              DIG 3 ;
+                              UPDATE ;
+                              UPDATE 1 ;
+                              NIL operation ;
+                              PAIR }
+                            { PUSH string "DEREGISTERING" ; FAILWITH } } }
+                   { SENDER ;
+                     DUP 3 ;
+                     CAR ;
+                     DUP 2 ;
+                     MEM ;
+                     IF { PUSH string "ALREADY_REGISTERED" ; FAILWITH }
+                        { DUP 3 ;
+                          GET 7 ;
+                          AMOUNT ;
+                          COMPARE ;
+                          LT ;
+                          IF { PUSH string "DEPOSIT_BELOW_MIN" ; FAILWITH }
+                             { PUSH nat 0 ;
+                               DUP 3 ;
+                               CAR ;
+                               SIZE ;
+                               COMPARE ;
+                               EQ ;
+                               IF { PUSH string "NO_WORKER_KEYS" ; FAILWITH }
+                                  { DUP 3 ;
+                                    GET 5 ;
+                                    DUP 3 ;
+                                    CAR ;
+                                    ITER { SWAP ;
+                                           DUP ;
+                                           DUP 3 ;
+                                           MEM ;
+                                           IF { PUSH string "WORKER_ALREADY_CLAIMED" ; FAILWITH }
+                                              { UNIT ; SOME ; DIG 2 ; UPDATE } } ;
+                                    NONE timestamp ;
+                                    AMOUNT ;
+                                    NOW ;
+                                    DUP 6 ;
+                                    CDR ;
+                                    DIG 6 ;
+                                    CAR ;
+                                    DUP 7 ;
+                                    PAIR 6 ;
+                                    DUP 4 ;
+                                    DUP 5 ;
+                                    CAR ;
+                                    DIG 2 ;
+                                    SOME ;
+                                    DUP 5 ;
+                                    UPDATE ;
+                                    UPDATE 1 ;
+                                    DIG 3 ;
+                                    GET 3 ;
+                                    PUSH bool True ;
+                                    DIG 4 ;
+                                    UPDATE ;
+                                    UPDATE 3 ;
+                                    SWAP ;
+                                    UPDATE 5 ;
+                                    NIL operation ;
+                                    PAIR } } } } } } } ;
+  view "get_relay"
+       address
+       (option
+          (pair (address %operator)
+                (pair (set %worker_keys key_hash)
+                      (pair (string %descriptor_url)
+                            (pair (timestamp %registered_at)
+                                  (pair (mutez %deposit) (option %unbond_at timestamp)))))))
+       { UNPAIR ; SWAP ; CAR ; SWAP ; GET } ;
+  view "is_listed" address bool { UNPAIR ; SWAP ; GET 3 ; SWAP ; MEM } }
+
